@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="detail-header">
+    <div>
+        <span class="badge badge-{{ activity.category.lower() }}">{{ activity.category }}</span>
+        <h1>{{ activity.name }}</h1>
+        {% if activity.description %}
+        <p class="text-muted">{{ activity.description }}</p>
+        {% endif %}
+    </div>
+    <div class="detail-actions">
+        <a href="/activities/{{ activity.id }}/mc" class="btn btn-secondary">Monte Carlo</a>
+        <a href="/candidates/new" class="btn btn-primary">Evaluate Yourself</a>
+    </div>
+</div>
+
+<section class="section" x-data="{ saving: false }">
+    <div class="section-header">
+        <h2>Metric Weights</h2>
+        <button
+            class="btn btn-primary"
+            @click="saving = true; $el.form?.requestSubmit()"
+            :disabled="saving"
+        >
+            <span x-show="!saving">Save Weights</span>
+            <span x-show="saving">Saving...</span>
+        </button>
+    </div>
+
+    <form id="weights-form" method="POST" action="/activities/{{ activity.id }}/weights" @submit.prevent="
+        fetch('/activities/{{ activity.id }}/weights', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                weights: Array.from(document.querySelectorAll('[data-weight]')).map(el => ({
+                    metric_id: parseInt(el.dataset.metricId),
+                    weight: parseFloat(el.value)
+                }))
+            })
+        }).then(r => { if(r.ok) { saving = false; showSaved = true; setTimeout(() => showSaved = false, 2000) } })
+    " x-data="{ showSaved: false }">
+        <div x-show="showSaved" class="alert alert-success" x-cloak>Weights saved!</div>
+
+        {% for category, metrics in grouped_metrics.items() %}
+        <div class="metric-group" x-data="{ open: true }">
+            <button class="metric-group-header" @click="open = !open">
+                <h3>{{ category }}</h3>
+                <span x-text="open ? '▼' : '▶'"></span>
+            </button>
+            <div class="metric-group-body" x-show="open">
+                {% for metric in metrics %}
+                <div class="metric-row" x-data="{ showSub: false }">
+                    <div class="metric-info">
+                        <span class="metric-name">{{ metric.name }}</span>
+                        {% if metric.description %}
+                        <span class="metric-desc">{{ metric.description }}</span>
+                        {% endif %}
+                        {% if not metric.has_weight %}
+                        <span class="badge badge-warning">needs calibration</span>
+                        {% endif %}
+                        {% if metric.sub_metrics %}
+                        <button class="btn-link" @click="showSub = !showSub" x-text="showSub ? 'hide sub-metrics' : 'show sub-metrics'"></button>
+                        {% endif %}
+                    </div>
+                    <div class="metric-weight">
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value="{{ metric.weight }}"
+                            data-metric-id="{{ metric.id }}"
+                            data-weight
+                            class="slider"
+                            x-on:input="$nextTick(() => {
+                                $el.nextElementSibling.textContent = $el.value;
+                            })"
+                        >
+                        <span class="weight-value">{{ metric.weight }}</span>
+                    </div>
+                    {% if metric.sub_metrics %}
+                    <div class="sub-metrics" x-show="showSub" x-cloak>
+                        {% for sub in metric.sub_metrics %}
+                        <div class="sub-metric-row">
+                            <span class="metric-name">{{ sub.name }}</span>
+                            <span class="badge badge-{{ sub.category.lower() }}">{{ sub.category }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </form>
+</section>
+
+{% endblock %}

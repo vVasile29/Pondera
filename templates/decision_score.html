@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="detail-header">
+    <div>
+        <h1>Score Your Alternatives</h1>
+        <p class="text-muted">{{ decision.query }}</p>
+    </div>
+</div>
+
+{% if already_scored %}
+<div class="alert alert-success">
+    Scores found! <a href="/decisions/{{ decision.id }}/result">View results</a> or re-score below.
+</div>
+{% endif %}
+
+<form action="/decisions/{{ decision.id }}/score" method="POST" x-data="scoreForm()">
+    <section class="section">
+        <div class="section-header">
+            <h2>Rate each alternative on every criterion</h2>
+            <button type="submit" class="btn btn-primary btn-lg">Calculate Results →</button>
+        </div>
+
+        {% if activities|length == 2 %}
+        <div class="insight-callout">
+            For each criterion below, use the sliders to score both alternatives from 0–100.
+            All sliders start at 50 — adjust up or down based on how well each alternative
+            satisfies each criterion.
+        </div>
+        {% endif %}
+
+        {% for c in criteria %}
+        <div class="metric-group" x-data="{ open: true }">
+            <button class="metric-group-header" @click="open = !open" type="button">
+                <div>
+                    <h3>{{ c.name }}</h3>
+                    <span class="text-muted" style="font-size: 0.75rem;">
+                        Weight: <strong>{{ c.default_weight }}</strong> |
+                        {{ "Higher is better" if c.higher_is_better else "Lower is better" }}
+                    </span>
+                </div>
+                <span x-text="open ? '▼' : '▶'"></span>
+            </button>
+            <div class="metric-group-body" x-show="open">
+                {% for act in activities %}
+                <div class="metric-row">
+                    <div class="metric-info">
+                        <span class="metric-name">{{ act.name }}</span>
+                    </div>
+                    <div class="metric-weight">
+                        <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value="50"
+                            name="score_{{ act.id }}_{{ c.id }}"
+                            class="slider"
+                            x-on:input="$nextTick(() => {
+                                $el.nextElementSibling.textContent = $el.value;
+                            })"
+                        >
+                        <span class="weight-value">50</span>
+                    </div>
+                </div>
+                {% endfor %}
+                {% if c.description %}
+                <div style="padding: 0.25rem 1rem 0.5rem;">
+                    <span class="text-muted" style="font-size: 0.75rem;">{{ c.description }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+
+        <div style="margin-top: 1.5rem; text-align: center;">
+            <button type="submit" class="btn btn-primary btn-lg">Calculate Results →</button>
+        </div>
+    </section>
+</form>
+
+{% endblock %}

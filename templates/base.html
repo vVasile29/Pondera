@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MetricMatch — Multi-Attribute Decision Engine</title>
+    <script src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <nav class="nav" x-data="{ mobileOpen: false }">
+        <div class="nav-inner">
+            <a href="/" class="nav-brand">MetricMatch</a>
+            <button class="nav-toggle" @click="mobileOpen = !mobileOpen" aria-label="Toggle menu">
+                <span></span><span></span><span></span>
+            </button>
+            <div class="nav-links" :class="{ 'open': mobileOpen }">
+                <a href="/" class="nav-link" :class="{ active: '{{ active_page }}' === 'home' }">Home</a>
+                <a href="/decisions" class="nav-link" :class="{ active: '{{ active_page }}' === 'decisions' }">Decisions</a>
+                <a href="/activities" class="nav-link" :class="{ active: '{{ active_page }}' === 'activities' }">Activities</a>
+                <a href="/metrics" class="nav-link" :class="{ active: '{{ active_page }}' === 'metrics' }">Metrics</a>
+                <a href="/candidates/new" class="nav-link" :class="{ active: '{{ active_page }}' === 'candidates' }">Candidates</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <p>MetricMatch — Multi-Attribute Decision Engine</p>
+    </footer>
+</body>
+</html>

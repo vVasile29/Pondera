@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="detail-header">
+    <div>
+        <h1>Metrics Manager</h1>
+        <p class="text-muted">Create, edit, and manage all metrics. Metrics are grouped by category.</p>
+    </div>
+    <div class="detail-actions">
+        <button class="btn btn-primary" onclick="document.getElementById('create-modal').classList.add('open')">New Metric</button>
+    </div>
+</div>
+
+<!-- Create Modal -->
+<div id="create-modal" class="modal" onclick="if(event.target===this)this.classList.remove('open')">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Create Metric</h2>
+            <button class="modal-close" onclick="document.getElementById('create-modal').classList.remove('open')">&times;</button>
+        </div>
+        <form method="POST" action="/metrics" class="form" onsubmit="
+            event.preventDefault();
+            fetch('/metrics', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: this.name.value,
+                    category: this.category.value,
+                    description: this.description.value || null,
+                    unit: this.unit.value || null,
+                    higher_is_better: this.higher_is_better.checked
+                })
+            }).then(r => r.json()).then(d => { if(d.id) window.location.reload(); });
+        ">
+            <div class="form-group">
+                <label for="name">Name *</label>
+                <input type="text" name="name" required class="form-input">
+            </div>
+            <div class="form-group">
+                <label for="category">Category *</label>
+                <select name="category" class="form-input" required>
+                    <option value="Physical">Physical</option>
+                    <option value="Mental">Mental</option>
+                    <option value="Professional">Professional</option>
+                    <option value="Environmental">Environmental</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="description">Description</label>
+                <textarea name="description" class="form-input" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+                <label for="unit">Unit</label>
+                <input type="text" name="unit" class="form-input" placeholder="cm, kg, ms, ...">
+            </div>
+            <div class="form-group checkbox-group">
+                <label>
+                    <input type="checkbox" name="higher_is_better" checked>
+                    Higher is better
+                </label>
+            </div>
+            <button type="submit" class="btn btn-primary">Create Metric</button>
+        </form>
+    </div>
+</div>
+
+{% for category, metrics in grouped_metrics.items() %}
+<section class="section">
+    <div class="section-header">
+        <h2>{{ category }} <span class="count">({{ metrics|length }})</span></h2>
+    </div>
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Unit</th>
+                    <th>Higher is Better</th>
+                    <th>Sub-metrics</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in metrics %}
+                {% if not m.is_sub_metric %}
+                <tr>
+                    <td>
+                        <strong>{{ m.name }}</strong>
+                        {% if m.description %}
+                        <br><small class="text-muted">{{ m.description }}</small>
+                        {% endif %}
+                    </td>
+                    <td>{{ m.unit or '—' }}</td>
+                    <td>{{ '✓' if m.higher_is_better else '✗' }}</td>
+                    <td>
+                        {% if m.children %}
+                        <ul class="sub-list">
+                            {% for c in m.children %}
+                            <li>{{ c.name }}</li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <span class="text-muted">None</span>
+                        {% endif %}
+                        <button class="btn-link" onclick="
+                            const name = prompt('Sub-metric name:');
+                            if(name) {
+                                fetch('/metrics/{{ m.id }}/sub', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ name: name, category: '{{ category }}' })
+                                }).then(r => r.json()).then(d => { if(d.id) window.location.reload(); });
+                            }
+                        ">+ Add sub-metric</button>
+                    </td>
+                    <td>
+                        <button class="btn-link btn-danger" onclick="
+                            if(confirm('Delete {{ m.name }}? This will remove all associated weights and scores.')) {
+                                fetch('/metrics/{{ m.id }}', { method: 'DELETE' })
+                                    .then(r => { if(r.ok) window.location.reload(); });
+                            }
+                        ">Delete</button>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endfor %}
+
+{% endblock %}

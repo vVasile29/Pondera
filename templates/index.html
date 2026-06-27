@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="hero">
+    <h1 class="hero-title">What's your decision today?</h1>
+    <p class="hero-subtitle">Describe any decision you're trying to make, and we'll help you compare the options.</p>
+
+    {% if error %}
+    <div class="alert alert-danger" style="background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 1rem; max-width: 650px; margin-left: auto; margin-right: auto;">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <form action="/decide" method="POST" class="hero-form">
+        <input
+            type="text"
+            name="q"
+            class="hero-input"
+            placeholder='e.g. "Should I buy a house or an apartment?", "Which job offer should I take?", "Am I better off as a bodybuilder or a runner?"'
+            value="{{ query or '' }}"
+        >
+        <button type="submit" class="btn btn-primary hero-btn">Decide</button>
+    </form>
+</section>
+
+<section class="section">
+    <div class="section-header">
+        <h2>Recent Decisions</h2>
+    </div>
+
+    {% if decisions %}
+    <div class="card-grid">
+        {% for decision in decisions %}
+        <a href="/decisions/{{ decision.id }}/result" class="card">
+            <div class="card-body">
+                <h3 class="card-title">{{ decision.query }}</h3>
+                <p class="card-text">{{ decision.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                {% if decision.category %}
+                <span class="badge badge-{{ decision.category.lower() }}">{{ decision.category }}</span>
+                {% endif %}
+                <span class="card-link">View results →</span>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No decisions yet. Type a question above to get started!</p>
+        <p style="margin-top: 1rem; font-size: 0.875rem; color: var(--text-muted);">
+            Try: "Should I buy a house or an apartment?" or "Which job offer should I take?"
+        </p>
+    </div>
+    {% endif %}
+</section>
+
+{% endblock %}
