@@ -1,0 +1,8 @@
+.opencode-workflow-state.md
+__pycache__/
+*.pyc
+todos.json
+*.db
+.env
+.venv/
+venv/
