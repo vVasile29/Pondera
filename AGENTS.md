@@ -1,182 +1,125 @@
-# MetricMatch — Build Instructions
+# MetricMatch — Dynamic Decision Engine
 
-This file is the single source of truth for building MetricMatch. The pipeline orchestrator reads this to plan, debate, implement, review, test, lint, and commit.
+Multi-criteria decision analysis (MCDA) web app. Type a question, get a weighted scoring matrix, tweak, and see the winner.
 
 ---
 
-## 1. Project Description
+## 1. Core Flow
 
-MetricMatch is a **multi-attribute decision engine** web app. It helps users make decisions when there are too many variables to keep in their head.
+1. User lands on dashboard with free-text input: *"What's your decision today?"*
+2. System **parses** the question — extracts alternatives (from "or"/"vs") and maps to the decision ontology
+3. Shows **review page** — user adds/removes alternatives and criteria, adjusts weights
+4. **Scoring page** — rate each alternative on each criterion (sliders 0–100)
+5. **Results page** — ranked alternatives + radar chart (Chart.js) + detailed scores table
+6. **Monte Carlo / What-if** — sensitivity analysis on any criterion
 
-**Core flow:**
-1. User lands on a welcoming dashboard with a free-text input: *"What's your decision today?"*
-2. System parses the input and suggests relevant **activities** with sensible default **metrics** and **weights**
-3. User tweaks metric weights per activity (sliders, 0–100)
-4. User creates a **candidate** (themselves or a hypothetical person), scores them on each metric (sliders, 0–100)
-5. System computes best-fit activities, shows a radar chart + ranked list
-6. **Monte Carlo mode** generates random candidates to reveal which metrics *really* discriminate for an activity
-7. Users can save candidates, compare side-by-side, and drill into sub-metrics
-
-**Philosophy:** The app should be useful *instantly* — seeded with real-life activities and metrics so the user tweaks, not creates from scratch.
+**Notable:** No predefined seed data — everything is dynamically generated from the ontology.
 
 ---
 
 ## 2. Tech Stack
 
-| Layer | Technology | Rationale |
-|-------|-----------|-----------|
-| Backend | Python FastAPI | Async, auto-OpenAPI, familiar |
-| Database | SQLAlchemy + SQLite (dev) → PostgreSQL (prod) | Connection string swap |
-| Frontend | Jinja2 + Alpine.js + Chart.js | Zero build step, no npm, CDN-loaded scripts |
-| Testing | pytest + httpx | FastAPI TestClient |
-
-**Constraint:** The frontend must work with zero node/npm dependencies. Load Alpine.js and Chart.js from CDN via `<script>` tags.
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python FastAPI |
+| Database | SQLAlchemy + SQLite (dev) → PostgreSQL (prod) |
+| Frontend | Jinja2 + Alpine.js + Chart.js (CDN, zero npm) |
+| Testing | pytest + httpx |
 
 ---
 
-## 3. Data Model (SQLAlchemy)
+## 3. Data Model
 
-### Metric
-```python
-class Metric(Base):
-    __tablename__ = "metrics"
-
-    id: int (PK, auto)
-    name: str (unique, indexed)
-    category: str  # e.g. "Physical", "Mental", "Environmental"
-    description: str | None
-    unit: str | None  # "cm", "kg", "points", "seconds", etc.
-    higher_is_better: bool  # default True
-    parent_id: int | None (FK → Metric.id, nullable)
-```
-
-**Sub-metrics:** A metric with `parent_id` set is a sub-metric. Depth is exactly 1 (no grandchild sub-metrics). When sub-metrics exist, the parent's score is the weighted average of its children. The parent retains its own weight for the activity.
+### Decision
+Groups one decision session. `query` is the original question, `category` from ontology mapping.
 
 ### Activity
-```python
-class Activity(Base):
-    __tablename__ = "activities"
+Decision alternatives (e.g. "House", "Apartment"). Scoped to a Decision via `decision_id`.
 
-    id: int (PK, auto)
-    name: str (unique, indexed)
-    category: str  # e.g. "Sport", "Strategy", "Profession", "Combat"
-    description: str | None
-```
+### Metric
+Decision criteria (e.g. "Cost", "Location"). Scoped to a Decision via `decision_id`. Composite unique on `(name, decision_id)`.
 
 ### ActivityWeight
-```python
-class ActivityWeight(Base):
-    __tablename__ = "activity_weights"
+Per-(alternative, criterion) weight. How much this criterion matters for this alternative. 0–100.
 
-    id: int (PK, auto)
-    activity_id: int (FK → Activity.id)
-    metric_id: int (FK → Metric.id)
-    weight: float  # 0.0–100.0, how much this metric matters for this activity
-    # UniqueConstraint(activity_id, metric_id)
-```
+### AlternativeScore
+Score for an alternative on a criterion. 0–100. Unique per (activity, metric).
 
-### Candidate
-```python
-class Candidate(Base):
-    __tablename__ = "candidates"
-
-    id: int (PK, auto)
-    name: str
-    created_at: datetime (auto)
-```
-
-### CandidateScore
-```python
-class CandidateScore(Base):
-    __tablename__ = "candidate_scores"
-
-    id: int (PK, auto)
-    candidate_id: int (FK → Candidate.id)
-    metric_id: int (FK → Metric.id)
-    score: float  # 0.0–100.0
-    # UniqueConstraint(candidate_id, metric_id)
-```
+### Candidate + CandidateScore
+Legacy models for person-based evaluation (used by Activities/Metrics/Candidates routes). Not used by the decision flow.
 
 ---
 
 ## 4. Scoring Algorithm
 
-### Fit Score (candidate → activity)
-
 ```
-weights = {metric_id: weight} for activity
-scores  = {metric_id: score}  for candidate
-
-numerator   = Σ(score[m] × w)  for each m in weights ∩ scores
-denominator = Σ(w)              for each m in weights
-
-fit = numerator / denominator / 100.0  → 0.0–1.0
+For each alternative:
+  numerator   = Σ(score[criterion] × weight[criterion])
+  denominator = Σ(weight[criterion])
+  fit         = numerator / denominator / 100.0  → 0.0–1.0
 ```
-
-### Sub-metric resolution
-
-When computing a candidate's score for a metric that has children:
-- Load the children's scores and weights
-- Compute weighted average of children → this IS the parent's score
-- Use the parent's weight for the activity-level calculation
-
-### Metric importance (from Monte Carlo)
-
-Generate 200 random candidates. Score against target activity. Take top 10%. For each metric, compute the variance within the top 10%. Lower variance = more discriminating = more important for that activity.
 
 ---
 
-## 5. Seed Data
+## 5. Decision Ontology
 
-On first run (or via `seed.py`), populate the database with these activities and their metric weights. This makes the app useful immediately.
+13 categories with curated criteria and default weights:
 
-| Activity | Category | Metrics (weight: 0–100) |
-|----------|----------|------------------------|
-| Bodybuilder (aesthetic) | Fitness | Muscle Symmetry: 85, Discipline: 70, Diet Adherence: 75, Recovery: 50, Height: 30, Weight: 60 |
-| Linebacker (NFL) | Sport | Height: 60, Weight: 80, Speed: 85, Explosive Power: 90, Aggression: 75, Endurance: 50 |
-| Chess Grandmaster | Strategy | Analytical Thinking: 90, Pattern Recognition: 85, Memory: 70, Endurance: 60, Patience: 80, Stress Tolerance: 40 |
-| Marathon Runner | Fitness | Cardiovascular: 95, Endurance: 95, Weight: 60, Discipline: 80, Recovery: 65, Speed: 40 |
-| Sumo Wrestler | Sport | Weight: 95, Height: 70, Explosive Power: 75, Balance: 80, Aggression: 65, Flexibility: 30 |
-| Pilot | Profession | Reaction Time: 90, Stress Tolerance: 85, Vision: 80, Discipline: 85, Analytical Thinking: 70, Communication: 65 |
-| Software Engineer | Profession | Analytical Thinking: 85, Problem Solving: 90, Attention to Detail: 80, Collaboration: 60, Creativity: 55, Discipline: 50 |
+| Category | Criteria |
+|----------|----------|
+| Housing | Cost (90), Location (85), Space (75), Maintenance (65), Privacy (60), Safety (80), Neighborhood (70), Commute (75) |
+| Career | Salary (85), Growth (80), Work-Life (75), Security (65), Culture (70), Location (60), Benefits (70) |
+| Fitness | Cardio (70), Strength (75), Flexibility (60), Time (65), Cost (55), Enjoyment (80), Social (50) |
+| Education | Cost (80), Time (60), Career Outcome (90), Quality (75), Flexibility (65), Network (55) |
+| Technology | Price (80), Performance (85), Build (70), Battery (70), Ecosystem (60), Support (55) |
+| Vehicle | Price (85), Efficiency (75), Reliability (80), Safety (85), Space (65), Performance (60) |
+| Investment | Return (85), Risk (80), Liquidity (65), Horizon (55), Complexity (60), Fees (70) |
+| Health | Effectiveness (90), Cost (70), Convenience (65), Side Effects (75), Sustainability (80), Evidence (70) |
+| Travel | Cost (80), Attractions (85), Safety (80), Weather (65), Food (70), Accessibility (55) |
+| Entertainment | Enjoyment (90), Cost (60), Time (50), Quality (75), Replayability (40), Social (45) |
+| Lifestyle | Cost of Living (85), Job Market (80), Quality of Life (90), Climate (60), Community (70), Amenities (65) |
+| Business | Profit (90), Startup Cost (75), Risk (70), Time (65), Scalability (75), Passion (80) |
+| Food | Taste (90), Price (75), Healthiness (65), Convenience (60), Variety (50), Service (55) |
 
-**Metrics to create** (linked to categories):
-- Physical: Height, Weight, Speed, Endurance, Flexibility, Balance, Explosive Power, Aggression, Reaction Time, Vision, Recovery, Muscle Symmetry, Cardiovascular
-- Mental: Analytical Thinking, Pattern Recognition, Memory, Patience, Creativity, Attention to Detail, Problem Solving
-- Professional: Discipline, Communication, Collaboration, Stress Tolerance, Diet Adherence
-
-Each metric gets a `category`, optional `unit`, and `higher_is_better: True` (default).
+Fallback: `GENERIC_CRITERIA` for unmatched queries.
 
 ---
 
-## 6. Route Table
+## 6. Routes
 
 ```
-GET    /                              → index.html (dashboard)
-POST   /decide                        → parse free-text, suggest/create activities
+GET    /                              → dashboard
+POST   /decide                        → parse question, redirect to decision flow
 
-GET    /activities                    → list all
-POST   /activities                    → create
-GET    /activities/{id}               → detail + weight sliders + sub-metrics
-PUT    /activities/{id}               → update name/category/description
-POST   /activities/{id}/weights       → bulk upsert metric weights
-GET    /activities/{id}/mc            → monte carlo results page
+GET    /decisions                     → list past decisions
+POST   /decisions/{id}/refine         → update alternatives/criteria
+GET    /decisions/{id}/score          → scoring page
+POST   /decisions/{id}/score          → submit scores → results
+GET    /decisions/{id}/result         → results page (ranking + radar chart)
+
+GET    /activities                    → redirect to / (legacy)
+POST   /activities                    → create activity (JSON API)
+GET    /activities/{id}               → detail + weight sliders
+PUT    /activities/{id}               → update
+POST   /activities/{id}/weights       → bulk upsert weights
+GET    /activities/{id}/mc            → Monte Carlo results
 
 GET    /metrics                       → list all, grouped by category
-POST   /metrics                       → create
+POST   /metrics                       → create (JSON API)
 PUT    /metrics/{id}                  → update
-DELETE /metrics/{id}                  → delete (cascade weights & scores)
-POST   /metrics/{id}/sub              → add sub-metric (creates child Metric linked to parent)
-GET    /metrics/{id}/suggest          → "this metric might affect these activities"
+DELETE /metrics/{id}                  → delete cascade
+POST   /metrics/{id}/sub              → add sub-metric
+GET    /metrics/{id}/suggest          → suggest activities for metric
 
 GET    /candidates                    → list saved candidates
-POST   /candidates                    → create with scores dict
-GET    /candidates/{id}               → detail + results (fit scores per activity)
+POST   /candidates                    → create with scores
+GET    /candidates/{id}               → detail + results
 DELETE /candidates/{id}               → delete
-GET    /candidates/random             → generate random candidate + show results
-POST   /candidates/compare            → accept list of IDs → comparison page
+GET    /candidates/random             → random candidate
+POST   /candidates/compare            → side-by-side comparison
 
-GET    /analysis/what-if              → query params: candidate_id, metric_id, new_score → recompute
+GET    /analysis/what-if              → query: candidate_id, metric_id, new_score
+POST   /analysis/preview              → live preview fit scores (from unsaved scores)
 ```
 
 ---
@@ -184,151 +127,58 @@ GET    /analysis/what-if              → query params: candidate_id, metric_id,
 ## 7. File Tree
 
 ```
-/home/vvasile/workspace/metricmatch/
 ├── main.py                   # FastAPI app, lifespan, mount routers
-├── models.py                 # SQLAlchemy: Metric, Activity, ActivityWeight, Candidate, CandidateScore
-├── schemas.py                # Pydantic request/response models
-├── database.py               # engine, SessionLocal, Base, get_db dependency
-├── seed.py                   # seed data function (call on startup if tables empty)
+├── models.py                 # Decision, Activity, Metric, ActivityWeight, AlternativeScore, Candidate, CandidateScore
+├── schemas.py                # Pydantic models
+├── database.py               # engine, session, get_db dependency
+├── requirements.txt
 
 ├── routers/
-│   ├── __init__.py
-│   ├── activities.py         # CRUD + weights + MC
+│   ├── activities.py         # CRUD + MC
 │   ├── metrics.py            # CRUD + sub-metrics + suggest
 │   ├── candidates.py         # CRUD + random + compare
-│   └── analysis.py           # what-if endpoint
+│   ├── analysis.py           # what-if + preview
+│   └── decisions.py          # decision flow (review → score → result)
 
 ├── services/
-│   ├── __init__.py
-│   ├── scoring.py            # fit_score, normalize, resolve_submetrics
-│   ├── monte_carlo.py        # generate random candidates, compute importance
+│   ├── scoring.py            # fit_score, resolve_submetrics, compute_alternative_fit_scores, compute_preview_fit_scores
+│   ├── monte_carlo.py        # 200 random candidates, variance analysis
+│   ├── ontology.py           # 13-category decision ontology + suggest_criteria() + extract_alternatives()
+│   ├── parser.py             # parse_question() — ties ontology to free-text parsing
 │   └── suggestions.py        # on new metric: which activities might use it
 
 ├── templates/
-│   ├── base.html             # layout: nav, Alpine + Chart.js CDN, custom CSS
-│   ├── index.html            # dashboard: "What's your decision?" + activity cards
-│   ├── activity_detail.html  # sliders per metric-weight, inline sub-metric expand
-│   ├── activity_mc.html      # monte carlo results: importance table + ranges
-│   ├── metric_manager.html   # CRUD table, grouped by category
-│   ├── candidate_form.html   # all-metric sliders, live preview of top activities
-│   ├── candidate_result.html # radar chart + ranked activity fits
-│   └── compare.html          # side-by-side candidate radar charts
+│   ├── base.html             # layout + Alpine.js + Chart.js CDN
+│   ├── index.html            # dashboard with question input + recent decisions
+│   ├── decision_review.html  # review parsed alternatives/criteria (edit names, weights, add/remove)
+│   ├── decision_score.html   # score each alternative on each criterion (sliders)
+│   ├── decision_result.html  # ranking + radar chart + detailed scores table
+│   ├── activity_detail.html  # legacy: weight sliders + sub-metrics
+│   ├── activity_mc.html      # legacy: Monte Carlo results
+│   ├── metric_manager.html   # legacy: CRUD table by category
+│   ├── candidate_form.html   # legacy: all-metric sliders
+│   ├── candidate_list.html   # legacy: saved candidates
+│   ├── candidate_result.html # legacy: radar chart + ranking
+│   └── compare.html          # legacy: side-by-side candidate charts
 
-├── static/
-│   └── css/
-│       └── app.css           # clean, minimal styles (dark/light friendly)
+├── static/css/
+│   └── app.css               # dark/light theme, responsive
 
-├── tests/
-│   ├── __init__.py
-│   ├── test_scoring.py       # unit tests for scoring algorithm
-│   ├── test_monte_carlo.py   # MC generates expected output shapes
-│   └── test_routes.py        # FastAPI TestClient route tests
-
-├── requirements.txt
-├── README.md
-├── AGENTS.md                 # this file
-└── .gitignore
+└── tests/
+    ├── test_scoring.py       # scoring algorithm (7 tests)
+    ├── test_monte_carlo.py   # MC output shape + invariants (4 tests)
+    └── test_routes.py        # route-level integration (33 tests)
 ```
 
 ---
 
-## 8. UI Design Guidelines
+## 8. Key Design Decisions
 
-### Dashboard (`index.html`)
-- Full-width text input: "What's your decision today?" with placeholder examples
-- Below: grid of existing activity cards (icon + name + category)
-- "Quick compare" button that lets you select 2–3 activities
-
-### Activity Detail (`activity_detail.html`)
-- Left: activity name, category, description (editable)
-- Right: scrollable list of metric-weight pairs. Each row:
-  - Metric name with category badge
-  - Weight slider 0–100 (Alpine.js, updates without page reload)
-  - [expand] button for sub-metrics (if any)
-- When a new metric is created without weights assigned, show "needs calibration" badge
-
-### Candidate Form (`candidate_form.html`)
-- All metrics across all activities shown as sliders
-- Categorized sections (Physical, Mental, Professional) — collapsible
-- As sliders change, the top-3 activity fits update live (Alpine.js calls `/analysis/what-if`)
-- [Save] button persists candidate
-
-### Candidate Result (`candidate_result.html`)
-- Radar/Spider chart (Chart.js) plotting candidate scores against the top-3 activity profiles
-- Ranked list with fit percentage
-- "Compare with another candidate" button
-- "Surprise me" button
-
-### Monte Carlo (`activity_mc.html`)
-- "Generate 200 candidates" button
-- Results table: Metric | Avg | Min | Max | StdDev | Importance (low stddev = high)
-- Insight callout: "The most discriminating metric for {activity} is {metric}"
-
-### Compare (`compare.html`)
-- 2–4 candidates side by side with their radar charts
-- Table of metric scores for direct comparison
-
----
-
-## 9. Pipeline Execution Order
-
-The pipeline orchestrator follows these phases:
-
-### Phase 1: Planner
-- Read this entire AGENTS.md
-- The spec is comprehensive — only ask questions if something is genuinely ambiguous
-- Write a plan with file-by-file breakdown to `.opencode-workflow-state.md`
-- Set next agent: `debater`
-
-### Phase 2: Debater
-- Read the state file + this spec
-- Critique: data model correctness, missing edge cases (e.g. what if a metric has no parent but children? what if weight is 0?), seed data sensibleness
-- If approved, set next agent: `implementer`
-
-### Phase 3: Implementer
-- THIS IS WHERE ALL CODE IS WRITTEN
-- Create every file listed in the file tree above
-- `main.py` must call `seed.seed_data()` at startup if tables are empty
-- Use Jinja2 templates with Alpine.js for interactivity
-- Chart.js radar chart for candidate comparison
-- No npm/node — CDN scripts only
-- Write test files alongside source
-- After writing, run `python3 -m pytest tests/ -v` to verify
-- Record changes in state file
-- Set next agent: `reviewer`
-
-### Phase 4: Reviewer
-- Read `git diff` and inspect all files
-- Check: data model integrity, scoring correctness, UI responsiveness, test coverage
-- If issues → set next agent back to `implementer`
-- If clean → set next agent: `tester`
-
-### Phase 5: Tester
-- Run `python3 -m pytest tests/ -v`
-- Report pass/fail and whether failures relate to recent code
-- Set next agent: `linter` (if passed) or `implementer` (if failed)
-
-### Phase 6: Linter
-- Run `python3 -m py_compile main.py models.py schemas.py database.py seed.py` + all routers + all services + all tests
-- Verify no syntax errors
-- Set next agent: `commit-msg`
-
-### Phase 7: Commit-msg
-- Read `git diff --stat` and `git diff`
-- Draft a conventional commit message
-- Do NOT commit automatically
-
----
-
-## 10. Key Design Decisions (from the conversation)
-
-1. **Sub-metrics are one level deep only** — a metric can have children (parent_id FK), but no grandchildren
-2. **Sub-metrics are opt-in** — expanded inline via Alpine.js, not shown by default
-3. **Scores are 0–100** (not 1–5) for scientific granularity
-4. **Weights are 0–100 floats** — ratio-scale, industry standard for MCDA
-5. **The welcome screen's free-text input is the primary entry point** — not a form
-6. **Monte Carlo generates 200 candidates** — analyzes top 10% for metric importance (low variance = high importance)
-7. **Seed data makes the app useful instantly** — 7 activities with sensible weights
-8. **No npm/node** — Alpine.js + Chart.js loaded from CDN
-9. **FastAPI serves Jinja2 templates** — no SPA framework
-10. **Database: SQLite in dev** — connection string change to PostgreSQL in prod
+1. **Dynamic parsing** — no predefined activities/metrics; everything comes from the ontology + user input
+2. **Per-(alternative, criterion) weights** — a criterion can matter more for one option than another
+3. **13-category ontology** — comprehensive enough for common decisions, extensible
+4. **Hybrid UI** — show parsed results first (review), then score, then results
+5. **No npm/node** — Alpine.js + Chart.js from CDN
+6. **Scores 0–100**, **Weights 0–100** — granular, industry standard
+7. **Monte Carlo** — 200 random candidates, top-10% variance analysis
+8. **Database: SQLite (dev) → PostgreSQL (prod)** — connection string swap
