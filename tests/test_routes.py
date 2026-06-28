@@ -318,6 +318,11 @@ def test_index_page(client, db):
     response = client.get("/")
     assert response.status_code == 200
     assert "What's your decision today?" in response.text
+    assert "House vs Apartment" in response.text
+    assert "Tesla for commuting" in response.text
+    assert "Job offers by minimum criteria" in response.text
+    assert "Python, Java, Go" in response.text
+    assert "Multi-Criteria Decision Analysis" in response.text
 
 
 def test_create_metric(client, db):
@@ -458,6 +463,63 @@ def test_decision_list_page(client, db):
     """Test decisions list page."""
     response = client.get("/decisions")
     assert response.status_code == 200
+    assert "Saved Decisions" in response.text
+    assert "What's your decision today?" not in response.text
+
+
+def test_decision_list_mode_aware_result_links(client, db):
+    """Saved decisions page links to the correct mode-specific result pages."""
+    from models import Decision
+
+    decisions = [
+        Decision(query="House or Apartment?", category="General", mode="choose"),
+        Decision(query="How good is Tesla?", category="General", mode="diagnose"),
+        Decision(query="Cost <= 60", category="General", mode="screen"),
+        Decision(query="Rank Python, Java, Go", category="General", mode="rank"),
+    ]
+    db.add_all(decisions)
+    db.commit()
+
+    response = client.get("/decisions")
+    assert response.status_code == 200
+    assert f'/decisions/{decisions[0].id}/result' in response.text
+    assert f'/evaluate/{decisions[1].id}/result' in response.text
+    assert f'/screen/{decisions[2].id}/result' in response.text
+    assert f'/rank/{decisions[3].id}/result' in response.text
+
+
+def test_delete_decision_redirect_param(client, db):
+    """Delete redirect query parameter can keep the user on /decisions."""
+    from models import Decision
+
+    decision = Decision(query="Tea or Coffee?", category="General", mode="choose")
+    db.add(decision)
+    db.commit()
+
+    response = client.post(
+        f"/decisions/{decision.id}/delete?redirect=/decisions",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/decisions"
+    assert db.query(Decision).filter(Decision.id == decision.id).first() is None
+
+
+def test_delete_decision_rejects_external_redirect(client, db):
+    """Delete redirect query parameter rejects external destinations."""
+    from models import Decision
+
+    decision = Decision(query="Tea or Coffee?", category="General", mode="choose")
+    db.add(decision)
+    db.commit()
+
+    response = client.post(
+        f"/decisions/{decision.id}/delete?redirect=https://evil.example",
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+    assert db.query(Decision).filter(Decision.id == decision.id).first() is None
 
 
 def test_decision_refine_and_score(client, db):

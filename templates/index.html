@@ -40,14 +40,28 @@
         <div class="hero-preview" aria-label="Decision matrix preview">
             <div class="preview-card">
                 <div class="preview-header">
-                    <span class="badge badge-choose">Compare</span>
-                    <span class="text-muted">Weighted fit</span>
+                    <span class="badge" :class="example.badgeClass" x-text="example.label"></span>
+                    <span class="text-muted" x-text="example.summary"></span>
                 </div>
-                <h2>House vs Apartment</h2>
-                <div class="preview-row"><span>Cost</span><strong>90</strong><div class="mini-bar"><span style="width: 90%"></span></div></div>
-                <div class="preview-row"><span>Quality</span><strong>85</strong><div class="mini-bar"><span style="width: 85%"></span></div></div>
-                <div class="preview-row"><span>Convenience</span><strong>70</strong><div class="mini-bar"><span style="width: 70%"></span></div></div>
-                <div class="preview-winner"><span>Recommended</span><strong>Apartment · 82%</strong></div>
+                <h2 x-text="example.title"></h2>
+                <div class="preview-alternatives" :style="`grid-template-columns: 1fr repeat(${example.alternatives.length}, minmax(64px, auto))`">
+                    <span>Criterion</span>
+                    <template x-for="alternative in example.alternatives" :key="alternative">
+                        <strong x-text="alternative"></strong>
+                    </template>
+                </div>
+                <template x-for="row in example.rows" :key="row.name">
+                    <div class="preview-matrix-row" :style="`grid-template-columns: 1fr repeat(${example.alternatives.length}, minmax(64px, auto))`">
+                        <span x-text="row.name"></span>
+                        <template x-for="(score, index) in row.scores" :key="`${row.name}-${index}`">
+                            <div>
+                                <strong x-text="score"></strong>
+                                <div class="mini-bar"><span :style="`width: ${score}%`"></span></div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <div class="preview-winner"><span x-text="example.calloutLabel"></span><strong x-text="example.callout"></strong></div>
             </div>
         </div>
     </div>
@@ -77,7 +91,8 @@
     <div>
         <span class="eyebrow">Decision science</span>
         <h2>Built around Multi-Criteria Decision Analysis</h2>
-        <p>Every result is backed by explicit criteria, transparent weights, detailed score tables, and radar-chart comparisons. That makes the reasoning easy to inspect and revise.</p>
+        <p>Pondera is grounded in Multi-Criteria Decision Analysis principles, including weighted-sum scoring and Value-Focused Thinking–style attention to explicit values. It turns preferences into inspectable criteria, weights, and 0–100 scores rather than presenting a black-box answer.</p>
+        <p>Its six global value dimensions—Financial, Quality, Time, Risk, Experience, and Convenience—are inspired by broad MCDA frameworks such as Keeney's Value-Focused Thinking and Belton & Stewart's MCDA work. They provide a reusable starting ontology while leaving final judgment with you.</p>
     </div>
     <div class="criteria-panel">
         <h3>Universal criteria framework</h3>
@@ -148,9 +163,71 @@ function categoryPicker() {
         screen: 'e.g. "Screen jobs by cost < 60 and quality > 70"',
         rank: 'e.g. "Rank Python, Java, Go"'
     };
+    const examples = {
+        choose: {
+            label: 'Compare',
+            badgeClass: 'badge-choose',
+            summary: 'Weighted comparison',
+            title: 'House vs Apartment',
+            alternatives: ['House', 'Apartment'],
+            rows: [
+                { name: 'Cost', scores: [62, 84] },
+                { name: 'Quality', scores: [88, 76] },
+                { name: 'Convenience', scores: [68, 86] }
+            ],
+            calloutLabel: 'Recommended',
+            callout: 'Apartment · 82%'
+        },
+        diagnose: {
+            label: 'Diagnose',
+            badgeClass: 'badge-diagnose',
+            summary: 'Single-option fit',
+            title: 'Tesla for commuting',
+            alternatives: ['Tesla'],
+            rows: [
+                { name: 'Performance', scores: [90] },
+                { name: 'Cost', scores: [58] },
+                { name: 'Convenience', scores: [82] }
+            ],
+            calloutLabel: 'Gap analysis',
+            callout: 'Strong performance; review cost'
+        },
+        screen: {
+            label: 'Screen',
+            badgeClass: 'badge-screen',
+            summary: 'Threshold filtering',
+            title: 'Job offers by minimum criteria',
+            alternatives: ['Offer A', 'Offer B', 'Offer C'],
+            rows: [
+                { name: 'Cost ≤ 60', scores: [55, 72, 48] },
+                { name: 'Quality ≥ 70', scores: [78, 82, 66] },
+                { name: 'Risk ≤ 50', scores: [44, 38, 57] }
+            ],
+            calloutLabel: 'Screen result',
+            callout: 'Offer A passes all thresholds'
+        },
+        rank: {
+            label: 'Rank',
+            badgeClass: 'badge-rank',
+            summary: 'Multi-option ranking',
+            title: 'Python, Java, Go',
+            alternatives: ['Python', 'Java', 'Go'],
+            rows: [
+                { name: 'Performance', scores: [82, 86, 91] },
+                { name: 'Accessibility', scores: [94, 78, 74] },
+                { name: 'Efficiency', scores: [80, 76, 88] }
+            ],
+            calloutLabel: 'Top ranked',
+            callout: 'Python · 86%'
+        }
+    };
     return {
         mode: 'choose',
         placeholder: placeholders.choose,
+        examples,
+        get example() {
+            return this.examples[this.mode] || this.examples.choose;
+        },
         setMode(nextMode) {
             this.mode = nextMode;
             this.placeholder = placeholders[nextMode] || placeholders.choose;

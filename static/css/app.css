@@ -347,6 +347,28 @@ body:has(.landing-hero) .main {
     font-size: 0.875rem;
 }
 
+.preview-alternatives,
+.preview-matrix-row {
+    display: grid;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--border);
+    font-size: 0.875rem;
+}
+
+.preview-alternatives {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.025em;
+}
+
+.preview-matrix-row > div {
+    display: grid;
+    gap: 0.375rem;
+}
+
 .mini-bar {
     height: 0.5rem;
     background: var(--secondary);
@@ -485,6 +507,22 @@ body:has(.landing-hero) .main {
     position: absolute;
     top: 0.75rem;
     right: 0.75rem;
+}
+
+.decision-card-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+}
+
+.decisions-list-page .section-header {
+    margin-bottom: 1.5rem;
+}
+
+.saved-decisions-empty {
+    display: grid;
+    justify-items: start;
+    gap: 0.75rem;
 }
 
 .final-cta {

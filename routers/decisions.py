@@ -11,13 +11,28 @@ router = APIRouter(prefix="/decisions", tags=["decisions"])
 templates = Jinja2Templates(directory="templates")
 
 
+def decision_result_url(decision: Decision) -> str:
+    mode = getattr(decision, "mode", None) or "choose"
+    return {
+        "diagnose": f"/evaluate/{decision.id}/result",
+        "screen": f"/screen/{decision.id}/result",
+        "rank": f"/rank/{decision.id}/result",
+    }.get(mode, f"/decisions/{decision.id}/result")
+
+
+def safe_delete_redirect(redirect: str | None) -> str:
+    return redirect if redirect in {"/", "/decisions"} else "/"
+
+
 @router.get("", response_class=HTMLResponse)
 def list_decisions(request: Request, db: Session = Depends(get_db)):
     decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
+    for decision in decisions:
+        decision.result_url = decision_result_url(decision)
     return templates.TemplateResponse(
         request,
-        "index.html",
-        {"request": request, "decisions": decisions, "active_page": "home"},
+        "decisions_list.html",
+        {"request": request, "decisions": decisions, "active_page": "decisions"},
     )
 
 
@@ -470,5 +485,5 @@ async def delete_decision(
     db.delete(decision)  # cascades to Activity → ActivityWeight
     db.commit()
 
-    redirect = request.query_params.get("redirect", "/")
+    redirect = safe_delete_redirect(request.query_params.get("redirect"))
     return RedirectResponse(url=redirect, status_code=303)
