@@ -1,4 +1,4 @@
-# MetricMatch
+# Pondera
 
 A **multi-criteria decision engine** that turns natural language questions into weighted scoring matrices.
 

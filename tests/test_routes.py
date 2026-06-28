@@ -79,7 +79,7 @@ def db():
 @pytest.fixture(scope="function")
 def client(db):
     """Create a TestClient with all routes but no lifespan."""
-    test_app = FastAPI(title="MetricMatch Test")
+    test_app = FastAPI(title="Pondera Test")
 
     test_app.include_router(metrics.router)
     test_app.include_router(decisions_router)

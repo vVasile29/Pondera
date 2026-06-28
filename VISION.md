@@ -1,4 +1,4 @@
-# MetricMatch — Dynamic Decision Engine
+# Pondera — Dynamic Decision Engine
 
 ## What we are building
 
