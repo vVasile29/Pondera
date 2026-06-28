@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
-from routers import activities, metrics, candidates, analysis
+from routers import metrics
 from routers.decisions import router as decisions_router
 from services.parser import parse_question
 
@@ -16,6 +16,26 @@ from services.parser import parse_question
 async def lifespan(app: FastAPI):
     # Startup: create tables
     Base.metadata.create_all(bind=engine)
+    # Seed universal metrics if they don't exist
+    from services.ontology import UNIVERSAL_DIMENSIONS
+    from models import Metric
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        existing = db.query(Metric).count()
+        if existing == 0:
+            for dim in UNIVERSAL_DIMENSIONS:
+                for m in dim["metrics"]:
+                    metric = Metric(
+                        name=m["name"],
+                        category=dim["name"],
+                        description=m["description"],
+                        higher_is_better=m["higher_is_better"],
+                    )
+                    db.add(metric)
+            db.commit()
+    finally:
+        db.close()
     yield
 
 
@@ -25,10 +45,7 @@ app = FastAPI(title="MetricMatch", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Include routers
-app.include_router(activities.router)
 app.include_router(metrics.router)
-app.include_router(candidates.router)
-app.include_router(analysis.router)
 app.include_router(decisions_router)
 
 templates = Jinja2Templates(directory="templates")
@@ -78,24 +95,14 @@ async def decide(request: Request, db: Session = Depends(get_db)):
     category = parsed["category"]
     is_parsed = parsed["parsed"]
 
+    # Get all global metrics
+    all_metrics = db.query(Metric).all()
+    metric_map = {m.name: m for m in all_metrics}
+
     # Create the Decision record
     decision = Decision(query=query, category=category)
     db.add(decision)
     db.flush()
-
-    # Create Metric records for each criterion
-    metric_objects = {}
-    for crit in criteria_list:
-        metric = Metric(
-            name=crit["name"],
-            category=category,
-            description=crit["description"],
-            higher_is_better=crit["higher_is_better"],
-            decision_id=decision.id,
-        )
-        db.add(metric)
-        db.flush()
-        metric_objects[crit["name"]] = metric
 
     # Create Activity records for each alternative
     for alt_name in alternatives:
@@ -109,15 +116,25 @@ async def decide(request: Request, db: Session = Depends(get_db)):
 
         # Create ActivityWeight records for each (activity, metric) pair
         for crit in criteria_list:
-            metric = metric_objects[crit["name"]]
-            aw = ActivityWeight(
-                activity_id=activity.id,
-                metric_id=metric.id,
-                weight=crit["default_weight"],
-            )
-            db.add(aw)
+            metric = metric_map.get(crit["name"])
+            if metric:
+                aw = ActivityWeight(
+                    activity_id=activity.id,
+                    metric_id=metric.id,
+                    weight=crit["default_weight"],
+                )
+                db.add(aw)
 
     db.commit()
+
+    # Enrich criteria_list with database IDs for the template
+    criteria_with_ids = []
+    for c in criteria_list:
+        metric = metric_map.get(c["name"])
+        criteria_with_ids.append({
+            **c,
+            "id": metric.id if metric else None,
+        })
 
     return templates.TemplateResponse(
         request,
@@ -126,7 +143,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             "request": request,
             "decision": decision,
             "alternatives": alternatives,
-            "criteria": criteria_list,
+            "criteria": criteria_with_ids,
             "category": category,
             "parsed": is_parsed,
             "active_page": "decisions",

@@ -9,7 +9,6 @@ from sqlalchemy import (
     ForeignKey,
     DateTime,
     UniqueConstraint,
-    Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -40,12 +39,11 @@ class Metric(Base):
     unit = Column(String, nullable=True)
     higher_is_better = Column(Boolean, default=True, nullable=False)
     parent_id = Column(Integer, ForeignKey("metrics.id"), nullable=True)
-    decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True, index=True)
 
     parent = relationship("Metric", remote_side="Metric.id", backref="children")
 
     __table_args__ = (
-        UniqueConstraint("name", "decision_id", name="uq_metric_name_decision"),
+        UniqueConstraint("name", name="uq_metric_name"),
     )
 
     def __repr__(self):
@@ -89,38 +87,6 @@ class ActivityWeight(Base):
 
     def __repr__(self):
         return f"<ActivityWeight(activity={self.activity_id}, metric={self.metric_id}, weight={self.weight})>"
-
-
-class Candidate(Base):
-    __tablename__ = "candidates"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    scores = relationship("CandidateScore", back_populates="candidate", cascade="all, delete-orphan")
-
-    def __repr__(self):
-        return f"<Candidate(id={self.id}, name={self.name!r})>"
-
-
-class CandidateScore(Base):
-    __tablename__ = "candidate_scores"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
-    metric_id = Column(Integer, ForeignKey("metrics.id"), nullable=False)
-    score = Column(Float, nullable=False)  # 0.0–100.0
-
-    candidate = relationship("Candidate", back_populates="scores")
-    metric = relationship("Metric")
-
-    __table_args__ = (
-        UniqueConstraint("candidate_id", "metric_id", name="uq_candidate_metric"),
-    )
-
-    def __repr__(self):
-        return f"<CandidateScore(candidate={self.candidate_id}, metric={self.metric_id}, score={self.score})>"
 
 
 class AlternativeScore(Base):

@@ -7,12 +7,10 @@ Type "should I buy a house or an apartment?" — the system parses your question
 ## Features
 
 - **Natural language input** — ask any comparison question, no predefined forms
-- **Decision ontology** — 13+ categories (Housing, Career, Fitness, Education, Technology, Vehicle, Investment, Health, Travel, Entertainment, Lifestyle, Business, Food) with curated criteria and default weights
-- **Interactive review** — see what the system parsed, add/remove alternatives and criteria, adjust weights
+- **Universal criteria framework** — 6 value dimensions (Financial, Quality, Time, Risk, Experience, Convenience) with 12 curated metrics
+- **Interactive review** — see what the system parsed, add/remove alternatives, select criteria, adjust weights
 - **Weighted scoring** — per-(alternative, criterion) weights with 0–100 sliders
 - **Radar chart** — visualize how alternatives compare across all criteria
-- **Monte Carlo analysis** — sensitivity analysis to see which criteria really drive the result
-- **What-if analysis** — adjust a score and see how rankings change
 - **Zero signup** — no accounts, no data stored on servers
 
 ## Quick Start

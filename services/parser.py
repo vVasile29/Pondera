@@ -1,6 +1,6 @@
 """Question parser for free-text decision queries."""
 
-from services.ontology import GENERIC_CRITERIA, suggest_criteria, extract_alternatives
+from services.ontology import UNIVERSAL_METRICS, suggest_criteria, extract_alternatives
 
 
 def parse_question(query: str) -> dict:
@@ -9,7 +9,7 @@ def parse_question(query: str) -> dict:
     Returns: {
         "alternatives": ["House", "Apartment"],
         "criteria": [{"name": "Cost", ...}, ...],
-        "category": "Housing",
+        "category": "General",
         "parsed": True
     }
     """
@@ -20,7 +20,7 @@ def parse_question(query: str) -> dict:
         return {
             "parsed": False,
             "alternatives": ["Option A", "Option B"],
-            "criteria": GENERIC_CRITERIA,
+            "criteria": UNIVERSAL_METRICS,
             "category": "General",
         }
 

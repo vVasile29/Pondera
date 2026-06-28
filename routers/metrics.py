@@ -6,9 +6,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import ActivityWeight, CandidateScore, Metric
-from schemas import MetricCreate, MetricOut, MetricUpdate, SubMetricCreate
-from services.suggestions import suggest_activities_for_metric
+from models import ActivityWeight, Metric
+from schemas import MetricCreate, MetricUpdate, SubMetricCreate
 
 router = APIRouter(tags=["metrics"])
 templates = Jinja2Templates(directory="templates")
@@ -91,11 +90,6 @@ def delete_metric(metric_id: int, db: Session = Depends(get_db)):
         ActivityWeight.metric_id == metric_id
     ).delete()
 
-    # Delete related candidate scores
-    db.query(CandidateScore).filter(
-        CandidateScore.metric_id == metric_id
-    ).delete()
-
     # Delete sub-metrics first
     db.query(Metric).filter(Metric.parent_id == metric_id).delete()
 
@@ -133,11 +127,4 @@ def add_sub_metric(
     return {"id": sub.id, "name": sub.name, "parent_id": sub.parent_id}
 
 
-@router.get("/metrics/{metric_id}/suggest")
-def suggest_activities(
-    metric_id: int, db: Session = Depends(get_db)
-):
-    metric = db.query(Metric).filter(Metric.id == metric_id).first()
-    if not metric:
-        raise HTTPException(status_code=404, detail="Metric not found")
-    return suggest_activities_for_metric(metric.name, db)
+
