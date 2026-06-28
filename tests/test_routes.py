@@ -17,6 +17,8 @@ from database import Base, get_db
 from routers import metrics
 from routers.decisions import router as decisions_router
 from routers.evaluate import router as evaluate_router
+from routers.screen import router as screen_router
+from routers.rank import router as rank_router
 
 # Per-test state
 _test_db_path = None
@@ -86,6 +88,8 @@ def client(db):
     test_app.include_router(metrics.router)
     test_app.include_router(decisions_router)
     test_app.include_router(evaluate_router)
+    test_app.include_router(screen_router)
+    test_app.include_router(rank_router)
 
     # Add the main app routes (index + decide)
     from fastapi.responses import HTMLResponse, RedirectResponse
@@ -101,11 +105,11 @@ def client(db):
         decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
         for d in decisions:
             mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
-            d.result_url = (
-                f"/evaluate/{d.id}/result"
-                if mode == "diagnose"
-                else f"/decisions/{d.id}/result"
-            )
+            d.result_url = {
+                "diagnose": f"/evaluate/{d.id}/result",
+                "screen": f"/screen/{d.id}/result",
+                "rank": f"/rank/{d.id}/result",
+            }.get(mode, f"/decisions/{d.id}/result")
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -173,6 +177,87 @@ def client(db):
                 db.commit()
                 return RedirectResponse(
                     url=f"/evaluate/{decision.id}/review", status_code=303
+                )
+
+            # If DIAGNOSE didn't match, try SCREEN
+            from services.parser import extract_thresholds, extract_list
+
+            thresholds = extract_thresholds(query)
+            if thresholds:
+                decision = Decision(query=query, category="General", mode="screen")
+                all_metrics = db.query(Metric).all()
+                metric_map = {m.name: m for m in all_metrics}
+                thresholds_with_ids = []
+                for t in thresholds:
+                    metric = metric_map.get(t["metric_name"])
+                    if metric:
+                        thresholds_with_ids.append(
+                            {
+                                "metric_id": metric.id,
+                                "operator": t["operator"],
+                                "value": t["value"],
+                            }
+                        )
+                if thresholds_with_ids:
+                    import json
+
+                    decision.thresholds = json.dumps(thresholds_with_ids)
+                db.add(decision)
+                db.flush()
+
+                from services.ontology import UNIVERSAL_METRICS as UM
+
+                for name in ["Option A", "Option B"]:
+                    activity = Activity(
+                        name=name, category="General", decision_id=decision.id
+                    )
+                    db.add(activity)
+                    db.flush()
+                    all_metrics = db.query(Metric).all()
+                    metric_map = {m.name: m for m in all_metrics}
+                    for m in UM:
+                        metric = metric_map.get(m["name"])
+                        if metric:
+                            aw = ActivityWeight(
+                                activity_id=activity.id,
+                                metric_id=metric.id,
+                                weight=m["default_weight"],
+                            )
+                            db.add(aw)
+                db.commit()
+                return RedirectResponse(
+                    url=f"/screen/{decision.id}/review", status_code=303
+                )
+
+            # Try RANK
+            list_parsed = extract_list(query)
+            if list_parsed["parsed"]:
+                decision = Decision(query=query, category="General", mode="rank")
+                db.add(decision)
+                db.flush()
+
+                from services.ontology import UNIVERSAL_METRICS as UM
+
+                for name in list_parsed["alternatives"]:
+                    activity = Activity(
+                        name=name, category="General", decision_id=decision.id
+                    )
+                    db.add(activity)
+                    db.flush()
+                    all_metrics = db.query(Metric).all()
+                    metric_map = {m.name: m for m in all_metrics}
+                    for m in UM:
+                        metric = metric_map.get(m["name"])
+                        if metric:
+                            aw = ActivityWeight(
+                                activity_id=activity.id,
+                                metric_id=metric.id,
+                                weight=m["default_weight"],
+                            )
+                            db.add(aw)
+                db.commit()
+                return RedirectResponse(
+                    url=f"/rank/{decision.id}/review", status_code=303
                 )
 
         # Continue as CHOOSE
@@ -767,3 +852,267 @@ def test_decide_with_no_match_fallback(client, db):
     assert resp.status_code == 200
     # Should show placeholder alternatives
     assert "Option A" in resp.text or "couldn" in resp.text.lower()
+
+
+# ── SCREEN (Mode 3) tests ──
+
+
+def test_screen_via_decide(client, db):
+    """Threshold query via /decide → redirect to /screen/{id}/review"""
+    resp = client.post(
+        "/decide",
+        data={"q": "Cost <= 60 and Quality >= 70"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/screen/")
+    assert "/review" in resp.headers["location"]
+
+    # Follow redirect
+    resp = client.get(resp.headers["location"])
+    assert resp.status_code == 200
+    assert "Screen Alternatives" in resp.text
+
+
+def test_screen_review_page(client, db):
+    """GET /screen/{id}/review loads with threshold UI"""
+    # Create via /screen POST
+    resp = client.post(
+        "/screen", data={"q": "Screen jobs by cost"}, follow_redirects=False
+    )
+    assert resp.status_code == 303
+    import re
+
+    decision_id = re.search(r"/screen/(\d+)/review", resp.headers["location"]).group(1)
+
+    # GET the review page
+    review_resp = client.get(f"/screen/{decision_id}/review")
+    assert review_resp.status_code == 200
+    assert "Screen Alternatives" in review_resp.text
+    assert "Threshold" in review_resp.text
+
+
+def test_screen_flow(client, db):
+    """Full flow: decide → refine → score → result"""
+    # Create via /decide
+    resp = client.post(
+        "/decide",
+        data={"q": "Cost <= 60"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    import re
+
+    decision_id = re.search(r"/screen/(\d+)/review", resp.headers["location"]).group(1)
+
+    # Get metric IDs from seeded metrics
+    from models import Metric
+
+    metrics = db.query(Metric).order_by(Metric.id).all()
+    assert len(metrics) >= 1
+
+    # Refine
+    refine_resp = client.post(
+        f"/screen/{decision_id}/refine",
+        data={
+            "alt_name_0": "Cheap Option",
+            "alt_name_1": "Expensive Option",
+            "metric_id_0": str(metrics[0].id),
+            "include_metric_0": "true",
+            "criterion_weight_0": "80",
+            "criterion_higher_0": "false",
+            "threshold_op_0": "<=",
+            "threshold_val_0": "60",
+        },
+        follow_redirects=False,
+    )
+    assert refine_resp.status_code == 303
+
+    # Follow to score page
+    score_page = client.get(refine_resp.headers["location"])
+    assert score_page.status_code == 200
+
+    # Submit scores
+    score_fields = re.findall(r'name="(score_\d+_\d+)"', score_page.text)
+    assert len(score_fields) >= 2
+
+    score_data = {}
+    for field in score_fields[:2]:
+        score_data[field] = "50"
+    score_resp = client.post(
+        f"/screen/{decision_id}/score",
+        data=score_data,
+    )
+    assert score_resp.status_code == 200
+    assert "Screen Results" in score_resp.text
+    assert "PASS" in score_resp.text or "FAIL" in score_resp.text
+
+
+def test_screen_not_found(client, db):
+    """404 for nonexistent screening"""
+    resp = client.get("/screen/99999/review")
+    assert resp.status_code == 404
+
+
+def test_screen_delete(client, db):
+    """Delete screen"""
+    resp = client.post("/screen", data={"q": "Screen test"}, follow_redirects=False)
+    decision_id = resp.headers["location"].split("/")[2]
+    resp = client.post(f"/screen/{decision_id}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+
+
+# ── RANK (Mode 4) tests ──
+
+
+def test_rank_via_decide(client, db):
+    """List query via /decide → redirect to /rank/{id}/review"""
+    resp = client.post(
+        "/decide",
+        data={"q": "Rank Python, Java, Go"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/rank/")
+    assert "/review" in resp.headers["location"]
+
+    # Follow redirect
+    resp = client.get(resp.headers["location"])
+    assert resp.status_code == 200
+    assert "Ranking Review" in resp.text
+
+
+def test_rank_review_page(client, db):
+    """GET /rank/{id}/review loads with 3 alternatives"""
+    resp = client.post("/rank", data={"q": "Python, Java, Go"}, follow_redirects=False)
+    assert resp.status_code == 303
+    import re
+
+    decision_id = re.search(r"/rank/(\d+)/review", resp.headers["location"]).group(1)
+
+    review_resp = client.get(f"/rank/{decision_id}/review")
+    assert review_resp.status_code == 200
+    assert "Ranking Review" in review_resp.text
+
+
+def test_rank_flow(client, db):
+    """Full flow: decide → refine → score → result"""
+    resp = client.post(
+        "/decide",
+        data={"q": "Python, Java, Go"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    import re
+
+    decision_id = re.search(r"/rank/(\d+)/review", resp.headers["location"]).group(1)
+
+    # Get metric IDs
+    from models import Metric
+
+    metrics = db.query(Metric).order_by(Metric.id).all()
+    assert len(metrics) >= 1
+
+    # Refine
+    refine_resp = client.post(
+        f"/rank/{decision_id}/refine",
+        data={
+            "alt_name_0": "Python",
+            "alt_name_1": "Java",
+            "alt_name_2": "Go",
+            "metric_id_0": str(metrics[0].id),
+            "include_metric_0": "true",
+            "criterion_weight_0": "80",
+            "criterion_higher_0": "true",
+        },
+        follow_redirects=False,
+    )
+    assert refine_resp.status_code == 303
+
+    # Follow to score page
+    score_page = client.get(refine_resp.headers["location"])
+    assert score_page.status_code == 200
+
+    # Submit scores
+    score_fields = re.findall(r'name="(score_\d+_\d+)"', score_page.text)
+    assert len(score_fields) >= 3
+
+    score_data = {}
+    for field in score_fields[:3]:
+        score_data[field] = "70"
+    score_resp = client.post(
+        f"/rank/{decision_id}/score",
+        data=score_data,
+    )
+    assert score_resp.status_code == 200
+    assert "Results" in score_resp.text or "Ranking" in score_resp.text
+
+
+def test_rank_not_found(client, db):
+    """404 for nonexistent ranking"""
+    resp = client.get("/rank/99999/review")
+    assert resp.status_code == 404
+
+
+def test_rank_delete(client, db):
+    """Delete ranking"""
+    resp = client.post("/rank", data={"q": "A, B, C"}, follow_redirects=False)
+    decision_id = resp.headers["location"].split("/")[2]
+    resp = client.post(f"/rank/{decision_id}/delete", follow_redirects=False)
+    assert resp.status_code == 303
+
+
+def test_rank_two_items_fallback(client, db):
+    """2 items should NOT route to rank — CHOOSE handles it"""
+    resp = client.post(
+        "/decide",
+        data={"q": "A, B"},
+        follow_redirects=False,
+    )
+    # Should NOT redirect to rank (fewer than 3 items)
+    assert not resp.headers.get("location", "").startswith("/rank/")
+
+
+def test_rank_result_reuses_decision_result(client, db):
+    """Rank result page shows ranking, radar chart, t-test"""
+    # Create a rank with 3 items and score them
+    resp = client.post("/rank", data={"q": "X, Y, Z"}, follow_redirects=False)
+    assert resp.status_code == 303
+    import re
+
+    decision_id = re.search(r"/rank/(\d+)/review", resp.headers["location"]).group(1)
+
+    from models import Metric
+
+    metrics = db.query(Metric).order_by(Metric.id).all()
+    assert len(metrics) >= 1
+
+    # Refine
+    refine_resp = client.post(
+        f"/rank/{decision_id}/refine",
+        data={
+            "alt_name_0": "X",
+            "alt_name_1": "Y",
+            "alt_name_2": "Z",
+            "metric_id_0": str(metrics[0].id),
+            "include_metric_0": "true",
+            "criterion_weight_0": "80",
+            "criterion_higher_0": "true",
+        },
+        follow_redirects=False,
+    )
+    assert refine_resp.status_code == 303
+
+    score_page = client.get(refine_resp.headers["location"])
+    score_fields = re.findall(r'name="(score_\d+_\d+)"', score_page.text)
+    score_data = {}
+    for field in score_fields[:3]:
+        score_data[field] = "70"
+    client.post(f"/rank/{decision_id}/score", data=score_data)
+
+    # Check result page
+    result = client.get(f"/rank/{decision_id}/result")
+    assert result.status_code == 200
+    # decision_result.html has "Ranking"
+    assert "Ranking" in result.text
+    assert "%" in result.text

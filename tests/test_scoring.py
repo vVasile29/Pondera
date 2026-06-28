@@ -1,12 +1,14 @@
 """Tests for the scoring algorithm (decision flow)."""
 
+import json
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
 from models import Decision, Activity, ActivityWeight, Metric, AlternativeScore
-from services.scoring import compute_alternative_fit_scores
+from services.scoring import compute_alternative_fit_scores, filter_by_thresholds
 
 
 @pytest.fixture(scope="function")
@@ -187,3 +189,106 @@ def test_sorting_order(db):
     assert len(results) == 2
     assert results[0]["activity_name"] == "High"
     assert results[1]["activity_name"] == "Low"
+
+
+# ── Threshold filtering tests ──
+
+
+class TestFilterByThresholds:
+    def test_all_pass(self, db):
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt = make_activity(db, "Cheap", decision.id)
+        db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
+        decision.thresholds = json.dumps(
+            [{"metric_id": m.id, "operator": "<=", "value": 60}]
+        )
+        db.commit()
+
+        result = filter_by_thresholds(decision.id, db)
+        assert result["all_passed"] is True
+        assert len(result["passed"]) == 1
+        assert len(result["failed"]) == 0
+
+    def test_one_fails_one_passes(self, db):
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt1 = make_activity(db, "Cheap", decision.id)
+        alt2 = make_activity(db, "Expensive", decision.id)
+        db.add_all(
+            [
+                ActivityWeight(activity_id=alt1.id, metric_id=m.id, weight=100),
+                ActivityWeight(activity_id=alt2.id, metric_id=m.id, weight=100),
+                AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
+                AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=80),
+            ]
+        )
+        decision.thresholds = json.dumps(
+            [{"metric_id": m.id, "operator": "<=", "value": 60}]
+        )
+        db.commit()
+
+        result = filter_by_thresholds(decision.id, db)
+        assert result["all_passed"] is False
+        assert len(result["passed"]) == 1
+        assert len(result["failed"]) == 1
+        assert result["passed"][0]["activity_name"] == "Cheap"
+        assert result["failed"][0]["activity_name"] == "Expensive"
+
+    def test_all_fail(self, db):
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt = make_activity(db, "Expensive", decision.id)
+        db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
+        decision.thresholds = json.dumps(
+            [{"metric_id": m.id, "operator": "<=", "value": 60}]
+        )
+        db.commit()
+
+        result = filter_by_thresholds(decision.id, db)
+        assert result["all_passed"] is False
+        assert len(result["passed"]) == 0
+        assert len(result["failed"]) == 1
+        assert result["survivor_results"] == []
+
+    def test_no_thresholds_all_pass(self, db):
+        decision = make_decision(db)
+        m = make_metric(db, "Quality")
+        alt = make_activity(db, "Good", decision.id)
+        db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=85))
+        db.commit()
+
+        result = filter_by_thresholds(decision.id, db)
+        assert result["all_passed"] is True
+        assert len(result["passed"]) == 1
+        assert len(result["failed"]) == 0
+        assert len(result["survivor_results"]) == 1
+
+    def test_lower_is_better_direction(self, db):
+        """Cost <= 30 with score 20 should pass; score 50 should fail."""
+        decision = make_decision(db)
+        m = make_metric(db, "Cost")
+        alt_good = make_activity(db, "LowCost", decision.id)
+        alt_bad = make_activity(db, "HighCost", decision.id)
+        db.add_all(
+            [
+                ActivityWeight(activity_id=alt_good.id, metric_id=m.id, weight=100),
+                ActivityWeight(activity_id=alt_bad.id, metric_id=m.id, weight=100),
+                AlternativeScore(activity_id=alt_good.id, metric_id=m.id, score=20),
+                AlternativeScore(activity_id=alt_bad.id, metric_id=m.id, score=50),
+            ]
+        )
+        decision.thresholds = json.dumps(
+            [{"metric_id": m.id, "operator": "<=", "value": 30}]
+        )
+        db.commit()
+
+        result = filter_by_thresholds(decision.id, db)
+        assert result["all_passed"] is False
+        assert len(result["passed"]) == 1
+        assert result["passed"][0]["activity_name"] == "LowCost"
+        assert len(result["failed"]) == 1
+        assert result["failed"][0]["activity_name"] == "HighCost"

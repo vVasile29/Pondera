@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="detail-header">
+    <div>
+        <h1>Ranking Review</h1>
+        <p class="text-muted">Your question: "{{ decision.query }}"</p>
+        {% if category %}
+        <span class="badge badge-{{ category.lower() }}">{{ category }}</span>
+        {% endif %}
+    </div>
+    <div class="detail-actions">
+        <form action="/rank/{{ decision.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this ranking and all its data?')">
+            <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+    </div>
+</div>
+
+{% if parsed %}
+<div class="insight-callout">
+    We detected <strong>{{ alternatives|length }}</strong> alternatives. Select criteria below, then continue to scoring.
+</div>
+{% else %}
+<div class="insight-callout">
+    Enter 3+ alternatives to rank. Make sure you have at least 3 items for a meaningful ranking.
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert alert-danger" style="background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 1rem;">
+    {{ error }}
+</div>
+{% endif %}
+
+<form action="/rank/{{ decision.id }}/refine" method="POST" x-data="rankForm()">
+    <section class="section">
+        <div class="section-header">
+            <h2>Alternatives</h2>
+            <button type="button" class="btn btn-secondary" @click="addAlternative()">+ Add</button>
+        </div>
+
+        <div class="form">
+            <template x-for="(alt, index) in alternatives" :key="index">
+                <div class="metric-row">
+                    <div class="metric-info" style="flex:1">
+                        <input
+                            type="text"
+                            :name="'alt_name_' + index"
+                            x-model="alt.name"
+                            class="form-input"
+                            placeholder="Alternative name"
+                        >
+                    </div>
+                    <button type="button" class="btn btn-danger" @click="removeAlternative(index)" x-show="alternatives.length > 3">Remove</button>
+                </div>
+            </template>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-header">
+            <h2>Criteria</h2>
+            <p class="text-muted">Select from universal criteria and adjust weights.</p>
+        </div>
+
+        <div>
+            <template x-for="(crit, index) in criteria" :key="index">
+                <div class="metric-group" style="margin-bottom: 0.5rem;">
+                    <div class="metric-group-body" style="padding: 0.75rem 1rem;">
+                        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+                            <div style="min-width: 30px;">
+                                <input
+                                    type="checkbox"
+                                    :name="'include_metric_' + index"
+                                    x-model="crit.include"
+                                    true-value="true"
+                                    false-value="false"
+                                >
+                            </div>
+                            <div style="flex: 2; min-width: 140px;">
+                                <input
+                                    type="hidden"
+                                    :name="'metric_id_' + index"
+                                    x-model="crit.metric_id"
+                                >
+                                <label style="font-weight: 600;" x-text="crit.name"></label>
+                                <br><span style="font-size: 0.75rem; color: var(--text-muted);" x-text="crit.description"></span>
+                            </div>
+                            <div style="min-width: 120px;">
+                                <label style="font-size: 0.75rem; color: var(--text-muted);">
+                                    Weight: <strong x-text="crit.default_weight"></strong>
+                                </label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    :name="'criterion_weight_' + index"
+                                    x-model="crit.default_weight"
+                                    class="slider"
+                                >
+                            </div>
+                            <div class="checkbox-group" style="min-width: 100px;">
+                                <label style="font-size: 0.75rem;">
+                                    <input
+                                        type="checkbox"
+                                        :name="'criterion_higher_' + index"
+                                        x-model="crit.higher_is_better"
+                                        true-value="true"
+                                        false-value="false"
+                                    >
+                                    Higher is better
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </section>
+
+    <section class="section" style="display: flex; gap: 0.75rem;">
+        <button type="submit" class="btn btn-primary btn-lg">Confirm &amp; Continue →</button>
+        <a href="/" class="btn btn-secondary btn-lg">Cancel</a>
+    </section>
+</form>
+
+<script>
+function rankForm() {
+    return {
+        alternatives: [
+            {% for alt in alternatives %}
+            { name: {{ alt|tojson }} },
+            {% endfor %}
+        ],
+        criteria: [
+            {% for c in criteria %}
+            {
+                metric_id: {{ c.id if c.id is defined else c.get('id', '')|tojson }},
+                name: {{ c.name|tojson }},
+                description: {{ c.description|tojson }},
+                default_weight: {{ c.default_weight|tojson }},
+                higher_is_better: {% if c.higher_is_better is defined %}{{ c.higher_is_better|tojson }}{% else %}true{% endif %},
+                include: {% if c.include is defined and not c.include %}false{% else %}true{% endif %},
+            },
+            {% endfor %}
+        ],
+        addAlternative() {
+            this.alternatives.push({ name: '' });
+        },
+        removeAlternative(index) {
+            if (this.alternatives.length > 3) {
+                this.alternatives.splice(index, 1);
+            }
+        },
+    }
+}
+</script>
+
+{% endblock %}

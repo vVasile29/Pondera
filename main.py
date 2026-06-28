@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, Request
@@ -10,6 +11,8 @@ from database import Base, engine, get_db
 from routers import metrics
 from routers.decisions import router as decisions_router
 from routers.evaluate import router as evaluate_router
+from routers.screen import router as screen_router
+from routers.rank import router as rank_router
 from services.parser import parse_question
 
 
@@ -50,6 +53,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(metrics.router)
 app.include_router(decisions_router)
 app.include_router(evaluate_router)
+app.include_router(screen_router)
+app.include_router(rank_router)
 
 templates = Jinja2Templates(directory="templates")
 
@@ -66,11 +71,11 @@ def index(request: Request, db: Session = Depends(get_db)):
     decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
     for d in decisions:
         mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
-        d.result_url = (
-            f"/evaluate/{d.id}/result"
-            if mode == "diagnose"
-            else f"/decisions/{d.id}/result"
-        )
+        d.result_url = {
+            "diagnose": f"/evaluate/{d.id}/result",
+            "screen": f"/screen/{d.id}/result",
+            "rank": f"/rank/{d.id}/result",
+        }.get(mode, f"/decisions/{d.id}/result")
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -109,6 +114,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
     # If CHOOSE didn't find alternatives, try DIAGNOSE parsing
     if not is_parsed:
         from services.parser import extract_subject
+
         diag = extract_subject(query)
         if diag["parsed"]:
             # Route as DIAGNOSE
@@ -119,7 +125,9 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             db.flush()
 
             subject = diag["subject"]
-            activity = Activity(name=subject, category="General", decision_id=decision.id)
+            activity = Activity(
+                name=subject, category="General", decision_id=decision.id
+            )
             db.add(activity)
             db.flush()
 
@@ -135,7 +143,89 @@ async def decide(request: Request, db: Session = Depends(get_db)):
                     )
                     db.add(aw)
             db.commit()
-            return RedirectResponse(url=f"/evaluate/{decision.id}/review", status_code=303)
+            return RedirectResponse(
+                url=f"/evaluate/{decision.id}/review", status_code=303
+            )
+
+        # If DIAGNOSE didn't match, try SCREEN
+        from services.parser import extract_thresholds, extract_list
+
+        thresholds = extract_thresholds(query)
+        if thresholds:
+            # Route as SCREEN
+            decision = Decision(query=query, category="General", mode="screen")
+            # Map metric names to IDs
+            all_metrics = db.query(Metric).all()
+            metric_map = {m.name: m for m in all_metrics}
+            thresholds_with_ids = []
+            for t in thresholds:
+                metric = metric_map.get(t["metric_name"])
+                if metric:
+                    thresholds_with_ids.append(
+                        {
+                            "metric_id": metric.id,
+                            "operator": t["operator"],
+                            "value": t["value"],
+                        }
+                    )
+            if thresholds_with_ids:
+                decision.thresholds = json.dumps(thresholds_with_ids)
+            db.add(decision)
+            db.flush()
+
+            from services.ontology import UNIVERSAL_METRICS as UM
+
+            for name in ["Option A", "Option B"]:
+                activity = Activity(
+                    name=name, category="General", decision_id=decision.id
+                )
+                db.add(activity)
+                db.flush()
+                all_metrics = db.query(Metric).all()
+                metric_map = {m.name: m for m in all_metrics}
+                for m in UM:
+                    metric = metric_map.get(m["name"])
+                    if metric:
+                        aw = ActivityWeight(
+                            activity_id=activity.id,
+                            metric_id=metric.id,
+                            weight=m["default_weight"],
+                        )
+                        db.add(aw)
+            db.commit()
+            return RedirectResponse(
+                url=f"/screen/{decision.id}/review", status_code=303
+            )
+
+        # Try RANK
+        list_parsed = extract_list(query)
+        if list_parsed["parsed"]:
+            # Route as RANK
+            decision = Decision(query=query, category="General", mode="rank")
+            db.add(decision)
+            db.flush()
+
+            from services.ontology import UNIVERSAL_METRICS as UM
+
+            for name in list_parsed["alternatives"]:
+                activity = Activity(
+                    name=name, category="General", decision_id=decision.id
+                )
+                db.add(activity)
+                db.flush()
+                all_metrics = db.query(Metric).all()
+                metric_map = {m.name: m for m in all_metrics}
+                for m in UM:
+                    metric = metric_map.get(m["name"])
+                    if metric:
+                        aw = ActivityWeight(
+                            activity_id=activity.id,
+                            metric_id=metric.id,
+                            weight=m["default_weight"],
+                        )
+                        db.add(aw)
+            db.commit()
+            return RedirectResponse(url=f"/rank/{decision.id}/review", status_code=303)
 
     # Continue as CHOOSE
     all_metrics = db.query(Metric).all()

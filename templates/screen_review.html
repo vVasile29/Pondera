@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="detail-header">
+    <div>
+        <h1>Screen Alternatives</h1>
+        <p class="text-muted">Your question: "{{ decision.query }}"</p>
+        {% if category %}
+        <span class="badge badge-{{ category.lower() }}">{{ category }}</span>
+        {% endif %}
+    </div>
+    <div class="detail-actions">
+        <form action="/screen/{{ decision.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this screening and all its data?')">
+            <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+    </div>
+</div>
+
+<div class="insight-callout">
+    <strong>Screen alternatives by thresholds.</strong> Set minimum requirements to filter out options.
+    Only alternatives that pass <em>all</em> thresholds will survive. Survivors are then ranked.
+</div>
+
+{% if error %}
+<div class="alert alert-danger" style="background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 1rem;">
+    {{ error }}
+</div>
+{% endif %}
+
+<form action="/screen/{{ decision.id }}/refine" method="POST" x-data="screenForm()">
+    <section class="section">
+        <div class="section-header">
+            <h2>Alternatives</h2>
+            <button type="button" class="btn btn-secondary" @click="addAlternative()">+ Add</button>
+        </div>
+
+        <div class="form">
+            <template x-for="(alt, index) in alternatives" :key="index">
+                <div class="metric-row">
+                    <div class="metric-info" style="flex:1">
+                        <input
+                            type="text"
+                            :name="'alt_name_' + index"
+                            x-model="alt.name"
+                            class="form-input"
+                            placeholder="Alternative name"
+                        >
+                    </div>
+                    <button type="button" class="btn btn-danger" @click="removeAlternative(index)" x-show="alternatives.length > 2">Remove</button>
+                </div>
+            </template>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="section-header">
+            <h2>Criteria &amp; Thresholds</h2>
+            <p class="text-muted">Select criteria, adjust weights, and set minimum requirements.</p>
+        </div>
+
+        <div>
+            <template x-for="(crit, index) in criteria" :key="index">
+                <div class="metric-group" style="margin-bottom: 0.5rem;">
+                    <div class="metric-group-body" style="padding: 0.75rem 1rem;">
+                        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+                            <div style="min-width: 30px;">
+                                <input
+                                    type="checkbox"
+                                    :name="'include_metric_' + index"
+                                    x-model="crit.include"
+                                    true-value="true"
+                                    false-value="false"
+                                >
+                            </div>
+                            <div style="flex: 2; min-width: 140px;">
+                                <input
+                                    type="hidden"
+                                    :name="'metric_id_' + index"
+                                    x-model="crit.metric_id"
+                                >
+                                <label style="font-weight: 600;" x-text="crit.name"></label>
+                                <br><span style="font-size: 0.75rem; color: var(--text-muted);" x-text="crit.description"></span>
+                            </div>
+                            <div style="min-width: 120px;">
+                                <label style="font-size: 0.75rem; color: var(--text-muted);">
+                                    Weight: <strong x-text="crit.default_weight"></strong>
+                                </label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    :name="'criterion_weight_' + index"
+                                    x-model="crit.default_weight"
+                                    class="slider"
+                                >
+                            </div>
+                            <div class="checkbox-group" style="min-width: 100px;">
+                                <label style="font-size: 0.75rem;">
+                                    <input
+                                        type="checkbox"
+                                        :name="'criterion_higher_' + index"
+                                        x-model="crit.higher_is_better"
+                                        true-value="true"
+                                        false-value="false"
+                                    >
+                                    Higher is better
+                                </label>
+                            </div>
+                        </div>
+                        <!-- Threshold row, shown only when criterion is included -->
+                        <div x-show="crit.include" style="display: flex; gap: 0.75rem; align-items: center; padding: 0.5rem 0 0 2rem; border-top: 1px solid var(--border); margin-top: 0.5rem;">
+                            <label style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); min-width: 80px;">Threshold:</label>
+                            <select
+                                :name="'threshold_op_' + index"
+                                x-model="crit.threshold_operator"
+                                style="padding: 0.375rem 0.5rem; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.8125rem; background: var(--bg-card); color: var(--text);"
+                            >
+                                <option value="<=">&le;</option>
+                                <option value=">=">&ge;</option>
+                                <option value="<">&lt;</option>
+                                <option value=">">&gt;</option>
+                            </select>
+                            <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                :name="'threshold_val_' + index"
+                                x-model="crit.threshold_value"
+                                class="form-input"
+                                style="width: 80px; padding: 0.375rem 0.5rem; font-size: 0.8125rem;"
+                                placeholder="Value"
+                            >
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </section>
+
+    <section class="section" style="display: flex; gap: 0.75rem;">
+        <button type="submit" class="btn btn-primary btn-lg">Confirm &amp; Continue →</button>
+        <a href="/" class="btn btn-secondary btn-lg">Cancel</a>
+    </section>
+</form>
+
+<script>
+function screenForm() {
+    return {
+        alternatives: [
+            {% for alt in alternatives %}
+            { name: {{ alt|tojson }} },
+            {% endfor %}
+        ],
+        criteria: [
+            {% for c in criteria %}
+            {
+                metric_id: {{ c.id if c.id is defined else c.get('id', '')|tojson }},
+                name: {{ c.name|tojson }},
+                description: {{ c.description|tojson }},
+                default_weight: {{ c.default_weight|tojson }},
+                higher_is_better: {% if c.higher_is_better is defined %}{{ c.higher_is_better|tojson }}{% else %}true{% endif %},
+                include: {% if c.include is defined and not c.include %}false{% else %}true{% endif %},
+                threshold_operator: '<=' ,
+                threshold_value: '' ,
+            },
+            {% endfor %}
+        ],
+        addAlternative() {
+            this.alternatives.push({ name: '' });
+        },
+        removeAlternative(index) {
+            if (this.alternatives.length > 2) {
+                this.alternatives.splice(index, 1);
+            }
+        },
+    }
+}
+</script>
+
+{% endblock %}

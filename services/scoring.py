@@ -1,8 +1,147 @@
+import json
 import math
 
 from sqlalchemy.orm import Session
 
 from models import ActivityWeight
+
+
+# ── Threshold-based elimination (Elimination by Aspects) ──
+
+
+def filter_by_thresholds(decision_id: int, db: Session) -> dict:
+    """Apply Elimination by Aspects filtering.
+
+    Reads thresholds from Decision.thresholds JSON.
+    Checks each activity's AlternativeScores against each threshold.
+
+    Returns: {
+        "passed": [...],
+        "failed": [{"name": ..., "reason": ...}],
+        "all_passed": True/False,
+        "survivor_results": [...]  # compute_alternative_fit_scores on passed only
+    }
+    """
+    from models import Activity, AlternativeScore, Decision, Metric
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision:
+        return {"passed": [], "failed": [], "all_passed": True, "survivor_results": []}
+
+    # Parse thresholds JSON
+    thresholds = []
+    if decision.thresholds:
+        try:
+            thresholds = json.loads(decision.thresholds)
+        except (json.JSONDecodeError, TypeError):
+            thresholds = []
+
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+
+    if not thresholds:
+        # No thresholds applied — all pass, return all fit scores
+        all_results = compute_alternative_fit_scores(decision_id, db)
+        passed = [{"activity_id": a.id, "activity_name": a.name} for a in activities]
+        return {
+            "passed": passed,
+            "failed": [],
+            "all_passed": True,
+            "survivor_results": all_results,
+        }
+
+    # Build metric lookup
+    all_metrics = db.query(Metric).all()
+    metric_map = {m.id: m for m in all_metrics}
+
+    passed = []
+    failed = []
+
+    for activity in activities:
+        # Get scores for this activity
+        scores_map: dict[int, float] = {}
+        for ascore in (
+            db.query(AlternativeScore)
+            .filter(AlternativeScore.activity_id == activity.id)
+            .all()
+        ):
+            scores_map[ascore.metric_id] = ascore.score
+
+        fail_reasons = []
+        for t in thresholds:
+            metric_id = t.get("metric_id")
+            operator = t.get("operator", "<=")
+            threshold_value = float(t.get("value", 0))
+
+            # Clamp threshold value to 0-100
+            threshold_value = max(0.0, min(100.0, threshold_value))
+
+            # Skip unknown metric_ids
+            if metric_id not in metric_map:
+                continue
+
+            score = scores_map.get(metric_id)
+            if score is None:
+                # No score for this metric — fail
+                metric_name = metric_map[metric_id].name
+                fail_reasons.append(
+                    f"No score available for {metric_name} (threshold: {operator} {threshold_value})"
+                )
+                continue
+
+            # Clamp score to 0-100
+            score = max(0.0, min(100.0, score))
+
+            metric_name = metric_map[metric_id].name
+
+            # Check threshold
+            failed_check = False
+            if operator == "<=" and not (score <= threshold_value):
+                failed_check = True
+            elif operator == ">=" and not (score >= threshold_value):
+                failed_check = True
+            elif operator == "<" and not (score < threshold_value):
+                failed_check = True
+            elif operator == ">" and not (score > threshold_value):
+                failed_check = True
+
+            if failed_check:
+                fail_reasons.append(
+                    f"{metric_name} ({score}) fails {operator} {threshold_value}"
+                )
+
+        if fail_reasons:
+            failed.append(
+                {
+                    "activity_id": activity.id,
+                    "activity_name": activity.name,
+                    "reasons": fail_reasons,
+                }
+            )
+        else:
+            passed.append(
+                {
+                    "activity_id": activity.id,
+                    "activity_name": activity.name,
+                }
+            )
+
+    # Compute fit scores on survivors
+    survivor_ids = [p["activity_id"] for p in passed]
+    if survivor_ids:
+        survivor_results = compute_alternative_fit_scores(decision_id, db)
+        # Filter to only survivors (fit scores are already computed across all activities)
+        survivor_results = [
+            r for r in survivor_results if r["activity_id"] in survivor_ids
+        ]
+    else:
+        survivor_results = []
+
+    return {
+        "passed": passed,
+        "failed": failed,
+        "all_passed": len(failed) == 0,
+        "survivor_results": survivor_results,
+    }
 
 
 # ── Paired t-test for statistical significance ──

@@ -16,7 +16,7 @@
             type="text"
             name="q"
             class="hero-input"
-            placeholder='e.g. "Should I buy a house or an apartment?", "How good is a Tesla for commuting?"'
+            placeholder='e.g. "Should I buy a house or an apartment?", "How good is a Tesla for commuting?", "Rank Python, Java, Go", "Screen jobs by cost &lt; 60"'
             value="{{ query or '' }}"
         >
         <button type="submit" class="btn btn-primary hero-btn">Decide</button>
@@ -38,7 +38,7 @@
                 {% if decision.category %}
                 <span class="badge badge-{{ decision.category.lower() }}">{{ decision.category }}</span>
                 {% endif %}
-                <span class="badge" style="background: {% if decision.mode == 'diagnose' %}#dbeafe; color: #1d4ed8{% else %}#dcfce7; color: #15803d{% endif %};">{{ "Diagnosis" if decision.mode == 'diagnose' else "Compare" }}</span>
+                <span class="badge" style="background: {% if decision.mode == 'diagnose' %}#dbeafe; color: #1d4ed8{% elif decision.mode == 'screen' %}#f3e8ff; color: #7c3aed{% elif decision.mode == 'rank' %}#fef3c7; color: #b45309{% else %}#dcfce7; color: #15803d{% endif %};">{{ "Diagnosis" if decision.mode == 'diagnose' else "Screen" if decision.mode == 'screen' else "Rank" if decision.mode == 'rank' else "Compare" }}</span>
                 <span class="card-link">View results →</span>
             </a>
             <form action="/decisions/{{ decision.id }}/delete" method="POST" style="position: absolute; top: 0.5rem; right: 0.5rem;">
