@@ -1,17 +1,16 @@
-"""Unit tests for the scoring algorithm."""
+"""Tests for the scoring algorithm (decision flow)."""
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from models import Activity, ActivityWeight, Candidate, CandidateScore, Metric
-from services.scoring import compute_fit_score, resolve_submetrics
+from models import Decision, Activity, ActivityWeight, Metric, AlternativeScore
+from services.scoring import compute_alternative_fit_scores
 
 
 @pytest.fixture(scope="function")
 def db():
-    """Create a fresh in-memory database for each test."""
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -20,186 +19,158 @@ def db():
     session.close()
 
 
-def test_basic_fit_score(db):
-    """Test a simple fit score computation."""
-    # Create metrics
-    m1 = Metric(name="Speed", category="Physical", unit="m/s")
-    m2 = Metric(name="Strength", category="Physical")
-    db.add_all([m1, m2])
+def make_decision(db, query="Test decision?"):
+    d = Decision(query=query, category="General")
+    db.add(d)
     db.flush()
+    return d
 
-    # Create activity
-    activity = Activity(name="Sprinter", category="Sport")
-    db.add(activity)
+
+def make_metric(db, name, category="Financial", higher_is_better=True):
+    m = Metric(name=name, category=category, higher_is_better=higher_is_better)
+    db.add(m)
     db.flush()
+    return m
 
-    # Add weights (Speed: 80, Strength: 40)
+
+def make_activity(db, name, decision_id):
+    a = Activity(name=name, category="General", decision_id=decision_id)
+    db.add(a)
+    db.flush()
+    return a
+
+
+def test_basic_scoring(db):
+    decision = make_decision(db)
+    m1 = make_metric(db, "Cost", higher_is_better=False)
+    m2 = make_metric(db, "Quality")
+    alt1 = make_activity(db, "Option A", decision.id)
+    alt2 = make_activity(db, "Option B", decision.id)
+
+    # Weights: Cost=80, Quality=60
     db.add_all([
-        ActivityWeight(activity_id=activity.id, metric_id=m1.id, weight=80),
-        ActivityWeight(activity_id=activity.id, metric_id=m2.id, weight=40),
+        ActivityWeight(activity_id=alt1.id, metric_id=m1.id, weight=80),
+        ActivityWeight(activity_id=alt1.id, metric_id=m2.id, weight=60),
+        ActivityWeight(activity_id=alt2.id, metric_id=m1.id, weight=80),
+        ActivityWeight(activity_id=alt2.id, metric_id=m2.id, weight=60),
     ])
     db.flush()
 
-    # Create candidate with scores
-    candidate = Candidate(name="Test")
-    db.add(candidate)
-    db.flush()
+    # Scores: Option A -> Cost=30, Quality=80; Option B -> Cost=70, Quality=40
     db.add_all([
-        CandidateScore(candidate_id=candidate.id, metric_id=m1.id, score=80),
-        CandidateScore(candidate_id=candidate.id, metric_id=m2.id, score=60),
+        AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=30),
+        AlternativeScore(activity_id=alt1.id, metric_id=m2.id, score=80),
+        AlternativeScore(activity_id=alt2.id, metric_id=m1.id, score=70),
+        AlternativeScore(activity_id=alt2.id, metric_id=m2.id, score=40),
     ])
     db.commit()
 
-    # Expected:
-    # numerator = 80*80 + 60*40 = 6400 + 2400 = 8800
-    # denominator = 80 + 40 = 120
-    # fit = 8800 / 120 / 100 = 0.7333...
-    fit = compute_fit_score(candidate.id, activity.id, db)
-    assert round(fit, 4) == 0.7333
+    results = compute_alternative_fit_scores(decision.id, db)
+    assert len(results) == 2
+    # Option A: (30*80 + 80*60)/(80+60) = (2400+4800)/140 = 7200/140 = 51.43 → /100 = 0.5143
+    # Option B: (70*80 + 40*60)/(80+60) = (5600+2400)/140 = 8000/140 = 57.14 → /100 = 0.5714
+    assert results[0]["activity_name"] == "Option B"
+    assert results[1]["activity_name"] == "Option A"
+    assert round(results[0]["fit_score"], 4) == 0.5714
+    assert round(results[1]["fit_score"], 4) == 0.5143
 
 
-def test_perfect_fit(db):
-    """Test perfect score (100 on all metrics)."""
-    m1 = Metric(name="Speed", category="Physical")
-    m2 = Metric(name="Strength", category="Physical")
-    db.add_all([m1, m2])
-    db.flush()
-
-    activity = Activity(name="Perfect Match", category="Sport")
-    db.add(activity)
-    db.flush()
-
-    db.add_all([
-        ActivityWeight(activity_id=activity.id, metric_id=m1.id, weight=50),
-        ActivityWeight(activity_id=activity.id, metric_id=m2.id, weight=50),
-    ])
-    db.flush()
-
-    candidate = Candidate(name="Perfect")
-    db.add(candidate)
-    db.flush()
-    db.add_all([
-        CandidateScore(candidate_id=candidate.id, metric_id=m1.id, score=100),
-        CandidateScore(candidate_id=candidate.id, metric_id=m2.id, score=100),
-    ])
+def test_perfect_score(db):
+    decision = make_decision(db)
+    m = make_metric(db, "Quality")
+    alt = make_activity(db, "Perfect", decision.id)
+    db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+    db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=100))
     db.commit()
+    results = compute_alternative_fit_scores(decision.id, db)
+    assert len(results) == 1
+    assert results[0]["fit_score"] == 1.0
 
-    fit = compute_fit_score(candidate.id, activity.id, db)
-    assert fit == 1.0
 
-
-def test_zero_fit(db):
-    """Test fit score when candidate has no scores for the activity's metrics."""
-    m1 = Metric(name="Speed", category="Physical")
-    db.add(m1)
-    db.flush()
-
-    activity = Activity(name="Empty", category="Sport")
-    db.add(activity)
-    db.flush()
-
-    db.add(ActivityWeight(activity_id=activity.id, metric_id=m1.id, weight=50))
-    db.flush()
-
-    candidate = Candidate(name="No Scores")
-    db.add(candidate)
+def test_zero_scores(db):
+    decision = make_decision(db)
+    m = make_metric(db, "Quality")
+    alt = make_activity(db, "Zero", decision.id)
+    db.add(ActivityWeight(activity_id=alt.id, metric_id=m.id, weight=100))
+    db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=0))
     db.commit()
+    results = compute_alternative_fit_scores(decision.id, db)
+    assert len(results) == 1
+    assert results[0]["fit_score"] == 0.0
 
-    fit = compute_fit_score(candidate.id, activity.id, db)
-    assert fit == 0.0
+
+def test_no_activities(db):
+    decision = make_decision(db)
+    results = compute_alternative_fit_scores(decision.id, db)
+    assert results == []
 
 
-def test_sub_metric_resolution(db):
-    """Test that sub-metrics are properly resolved."""
-    # Parent metric
-    parent = Metric(name="Fitness", category="Physical")
-    db.add(parent)
-    db.flush()
-
-    # Child metrics
-    child1 = Metric(name="Speed", category="Physical", parent_id=parent.id)
-    child2 = Metric(name="Endurance", category="Physical", parent_id=parent.id)
-    db.add_all([child1, child2])
-    db.flush()
-
-    activity = Activity(name="Athlete", category="Sport")
-    db.add(activity)
-    db.flush()
-
-    # Parent metric weight used at activity level
-    db.add(ActivityWeight(activity_id=activity.id, metric_id=parent.id, weight=100))
-    db.flush()
-
-    candidate = Candidate(name="Test")
-    db.add(candidate)
-    db.flush()
-
-    # Only child scores exist (no direct parent score)
-    db.add_all([
-        CandidateScore(candidate_id=candidate.id, metric_id=child1.id, score=80),
-        CandidateScore(candidate_id=candidate.id, metric_id=child2.id, score=60),
-    ])
+def test_no_weights_skipped(db):
+    decision = make_decision(db)
+    m = make_metric(db, "Quality")
+    alt = make_activity(db, "No Weights", decision.id)
+    # No ActivityWeight
+    db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
     db.commit()
-
-    # Parent score should be average of children: (80 + 60) / 2 = 70
-    parent_score = resolve_submetrics(candidate.id, parent.id, db)
-    assert parent_score == 70.0
-
-    # Fit = 70 * 100 / 100 / 100 = 0.7
-    fit = compute_fit_score(candidate.id, activity.id, db)
-    assert fit == 0.7
+    results = compute_alternative_fit_scores(decision.id, db)
+    assert len(results) == 0  # skipped because no weights
 
 
-def test_weighted_average_sub_metrics(db):
-    """Test that sub-metrics are equally weighted even with different child scores."""
-    parent = Metric(name="Combat", category="Physical")
-    db.add(parent)
-    db.flush()
+# ── Paired t-test tests ──
 
-    child1 = Metric(name="Strength", category="Physical", parent_id=parent.id)
-    child2 = Metric(name="Agility", category="Physical", parent_id=parent.id)
-    db.add_all([child1, child2])
-    db.flush()
 
-    candidate = Candidate(name="Fighter")
-    db.add(candidate)
-    db.flush()
+def test_paired_t_test_identical():
+    """Identical scores → t=0, p=1, not significant."""
+    from services.scoring import paired_t_test
+    result = paired_t_test([50, 60, 70, 80], [50, 60, 70, 80])
+    assert result["t_statistic"] == 0.0
+    assert result["p_value"] == 1.0
+    assert result["significant"] is False
 
+
+def test_paired_t_test_significant():
+    """Large consistent differences → significant."""
+    from services.scoring import paired_t_test
+    result = paired_t_test([90, 85, 88, 92], [50, 55, 60, 45])
+    assert result["significant"] is True
+    assert result["p_value"] < 0.05
+
+
+def test_paired_t_test_insufficient():
+    """Single criterion → error."""
+    from services.scoring import paired_t_test
+    result = paired_t_test([50], [60])
+    assert "error" in result
+
+
+def test_paired_t_test_mismatched_lengths():
+    """Mismatched lengths → error."""
+    from services.scoring import paired_t_test
+    result = paired_t_test([50, 60], [50])
+    assert "error" in result
+
+
+def test_paired_t_test_no_difference():
+    """Scores that average to same → not significant."""
+    from services.scoring import paired_t_test
+    result = paired_t_test([51, 49], [50, 50])
+    assert result["significant"] is False
+    assert result["mean_difference"] == 0.0
+
+
+def test_sorting_order(db):
+    decision = make_decision(db)
+    m = make_metric(db, "Score")
+    alt1 = make_activity(db, "Low", decision.id)
+    alt2 = make_activity(db, "High", decision.id)
     db.add_all([
-        CandidateScore(candidate_id=candidate.id, metric_id=child1.id, score=40),
-        CandidateScore(candidate_id=candidate.id, metric_id=child2.id, score=100),
+        ActivityWeight(activity_id=alt1.id, metric_id=m.id, weight=100),
+        ActivityWeight(activity_id=alt2.id, metric_id=m.id, weight=100),
+        AlternativeScore(activity_id=alt1.id, metric_id=m.id, score=30),
+        AlternativeScore(activity_id=alt2.id, metric_id=m.id, score=90),
     ])
     db.commit()
-
-    score = resolve_submetrics(candidate.id, parent.id, db)
-    assert score == 70.0  # (40 + 100) / 2
-
-
-def test_no_weights_returns_zero(db):
-    """Test that an activity with no weights returns 0 fit."""
-    candidate = Candidate(name="Lonely")
-    db.add(candidate)
-    db.commit()
-    fit = compute_fit_score(candidate.id, 999, db)
-    assert fit == 0.0
-
-
-def test_missing_metric_score_returns_zero(db):
-    """Test that a metric with no candidate score returns 0."""
-    m1 = Metric(name="Speed", category="Physical")
-    db.add(m1)
-    db.flush()
-
-    activity = Activity(name="Test", category="Sport")
-    db.add(activity)
-    db.flush()
-
-    db.add(ActivityWeight(activity_id=activity.id, metric_id=m1.id, weight=50))
-    db.flush()
-
-    candidate = Candidate(name="Missing Score")
-    db.add(candidate)
-    db.commit()
-
-    fit = compute_fit_score(candidate.id, activity.id, db)
-    assert fit == 0.0
+    results = compute_alternative_fit_scores(decision.id, db)
+    assert len(results) == 2
+    assert results[0]["activity_name"] == "High"
+    assert results[1]["activity_name"] == "Low"

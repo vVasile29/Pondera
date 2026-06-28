@@ -6,6 +6,12 @@
         <h1>Score Your Alternatives</h1>
         <p class="text-muted">{{ decision.query }}</p>
     </div>
+    <div class="detail-actions">
+        <a href="/decisions/{{ decision.id }}/review" class="btn btn-secondary">← Back to Criteria</a>
+        <form action="/decisions/{{ decision.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this decision and all its data?')">
+            <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+    </div>
 </div>
 
 {% if already_scored %}

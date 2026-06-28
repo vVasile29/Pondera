@@ -1,158 +1,146 @@
-from typing import Dict
+import math
 
 from sqlalchemy.orm import Session
 
-from models import ActivityWeight, CandidateScore, Metric
+from models import ActivityWeight
 
 
-def resolve_submetrics(candidate_id: int, metric_id: int, db: Session) -> float:
-    """Resolve a metric's score for a candidate, handling sub-metrics.
+# ── Paired t-test for statistical significance ──
 
-    If the metric has children, compute the weighted average of children's scores.
-    Each child's score is weighted equally (since sub-metrics don't have per-activity weights).
-    If no children, return the direct candidate score (or 0 if missing).
+
+def _betainc(x: float, a: float, b: float) -> float:
+    """Regularized incomplete beta function using continued fraction.
+
+    Uses modified Lentz's method (from Numerical Recipes).
+    I_x(a, b) = B(x; a, b) / B(a, b)
     """
-    metric = db.query(Metric).filter(Metric.id == metric_id).first()
-    if not metric:
+    if x < 0 or x > 1:
+        raise ValueError(f"x must be in [0, 1], got {x}")
+    if x == 0 or x == 1:
+        return 0.0 if x == 0 else 1.0
+    if a <= 0 or b <= 0:
+        raise ValueError(f"a and b must be positive, got a={a}, b={b}")
+
+    # Symmetry transformation for efficiency
+    if x > (a + 1) / (a + b + 2):
+        return 1.0 - _betainc(1.0 - x, b, a)
+
+    lbeta = math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+    front = math.exp(a * math.log(x) + b * math.log1p(-x) - lbeta - math.log(a))
+
+    MAX_ITER = 200
+    EPS = 3e-12
+
+    qab = a + b
+    qap = a + 1.0
+    qam = a - 1.0
+    c = 1.0
+    d = 1.0 - qab * x / qap
+    if abs(d) < 1e-30:
+        d = 1e-30
+    d = 1.0 / d
+    h = d
+
+    for m in range(1, MAX_ITER + 1):
+        m2 = 2 * m
+        # Even step
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        if abs(d) < 1e-30:
+            d = 1e-30
+        c = 1.0 + aa / c
+        if abs(c) < 1e-30:
+            c = 1e-30
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+
+        # Odd step
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        if abs(d) < 1e-30:
+            d = 1e-30
+        c = 1.0 + aa / c
+        if abs(c) < 1e-30:
+            c = 1e-30
+        d = 1.0 / d
+        delta = d * c
+        h *= delta
+
+        if abs(delta - 1.0) < EPS:
+            break
+
+    return front * h
+
+
+def _student_t_cdf(t: float, df: int) -> float:
+    """CDF of Student's t-distribution P(T <= t) for df degrees of freedom."""
+    if df < 1:
+        return float("nan")
+    if t == float("inf"):
+        return 1.0
+    if t == float("-inf"):
         return 0.0
 
-    # Check for children
-    children = db.query(Metric).filter(Metric.parent_id == metric_id).all()
+    x = df / (df + t * t)
+    a = df / 2.0
+    ibeta = _betainc(x, a, 0.5)
 
-    if not children:
-        # Direct score lookup
-        cs = (
-            db.query(CandidateScore)
-            .filter(
-                CandidateScore.candidate_id == candidate_id,
-                CandidateScore.metric_id == metric_id,
-            )
-            .first()
-        )
-        return cs.score if cs else 0.0
-
-    # Children exist — compute weighted average of children
-    total_weight = 0.0
-    weighted_sum = 0.0
-    for child in children:
-        cs = (
-            db.query(CandidateScore)
-            .filter(
-                CandidateScore.candidate_id == candidate_id,
-                CandidateScore.metric_id == child.id,
-            )
-            .first()
-        )
-        child_score = cs.score if cs else 0.0
-        # Sub-metrics are equally weighted relative to each other
-        weight = 1.0
-        total_weight += weight
-        weighted_sum += child_score * weight
-
-    if total_weight == 0:
-        return 0.0
-    return weighted_sum / total_weight
+    if t >= 0:
+        return 1.0 - 0.5 * ibeta
+    else:
+        return 0.5 * ibeta
 
 
-def compute_fit_score(candidate_id: int, activity_id: int, db: Session) -> float:
-    """Compute the fit score for a candidate against an activity.
+def paired_t_test(scores_a: list[float], scores_b: list[float]) -> dict:
+    """Perform a paired two-tailed t-test on two sets of scores.
 
-    Returns a float 0.0–1.0 representing the fit percentage.
+    The null hypothesis is that the mean paired difference is zero.
+    This is appropriate when the two alternatives share the same criteria
+    (paired by criterion), which is the MCDA case.
+
+    Returns a dict with keys:
+        t_statistic, p_value, degrees_of_freedom, mean_difference,
+        std_difference, significant (p < 0.05), num_criteria.
     """
-    weights: Dict[int, float] = {}
-    for aw in (
-        db.query(ActivityWeight)
-        .filter(ActivityWeight.activity_id == activity_id)
-        .all()
-    ):
-        weights[aw.metric_id] = aw.weight
+    n = len(scores_a)
+    if n != len(scores_b):
+        return {"error": f"Score lists have different lengths: {n} vs {len(scores_b)}"}
+    if n < 2:
+        return {"error": f"Need at least 2 paired criteria, got {n}"}
 
-    if not weights:
-        return 0.0
+    differences = [a - b for a, b in zip(scores_a, scores_b)]
+    mean_diff = sum(differences) / n
 
-    numerator = 0.0
-    denominator = 0.0
+    if n < 2:
+        return {"error": f"Need at least 2 paired criteria, got {n}"}
 
-    for metric_id, weight in weights.items():
-        score = resolve_submetrics(candidate_id, metric_id, db)
-        numerator += score * weight
-        denominator += weight
+    variance = sum((d - mean_diff) ** 2 for d in differences) / (n - 1)
+    std_diff = math.sqrt(variance)
+    df = n - 1
 
-    if denominator == 0:
-        return 0.0
+    if std_diff == 0:
+        # All differences identical
+        if mean_diff == 0:
+            p_value = 1.0
+            t_stat = 0.0
+        else:
+            t_stat = float("inf")
+            p_value = 0.0
+    else:
+        se = std_diff / math.sqrt(n)
+        t_stat = mean_diff / se
+        p_value = 2.0 * _student_t_cdf(-abs(t_stat), df)
 
-    return numerator / denominator / 100.0
-
-
-def compute_fit_scores_for_all_activities(
-    candidate_id: int, db: Session
-) -> list[dict]:
-    """Compute fit scores for a candidate against all activities.
-
-    Returns sorted list of {activity_id, activity_name, fit_score}.
-    """
-    from models import Activity
-
-    activities = db.query(Activity).all()
-    results = []
-    for activity in activities:
-        fit = compute_fit_score(candidate_id, activity.id, db)
-        results.append(
-            {
-                "activity_id": activity.id,
-                "activity_name": activity.name,
-                "category": activity.category,
-                "fit_score": round(fit, 4),
-            }
-        )
-    results.sort(key=lambda x: x["fit_score"], reverse=True)
-    return results
-
-
-def compute_preview_fit_scores(
-    scores: Dict[int, float], db: Session
-) -> list[dict]:
-    """Compute fit scores from a scores dict directly, without a candidate.
-
-    Used for the live preview on the candidate creation form.
-    Returns top-3 activities sorted by fit score.
-    """
-    from models import Activity
-
-    activities = db.query(Activity).all()
-    results = []
-
-    for activity in activities:
-        weights: Dict[int, float] = {}
-        for aw in (
-            db.query(ActivityWeight)
-            .filter(ActivityWeight.activity_id == activity.id)
-            .all()
-        ):
-            weights[aw.metric_id] = aw.weight
-
-        if not weights:
-            continue
-
-        numerator = 0.0
-        denominator = 0.0
-
-        for metric_id, weight in weights.items():
-            score = scores.get(metric_id, 0.0)
-            numerator += score * weight
-            denominator += weight
-
-        fit = (numerator / denominator / 100.0) if denominator > 0 else 0.0
-        results.append(
-            {
-                "activity_id": activity.id,
-                "activity_name": activity.name,
-                "fit_score": round(fit, 4),
-            }
-        )
-
-    results.sort(key=lambda x: x["fit_score"], reverse=True)
-    return results[:3]
+    return {
+        "t_statistic": round(t_stat, 4),
+        "p_value": round(p_value, 4),
+        "degrees_of_freedom": df,
+        "mean_difference": round(mean_diff, 4),
+        "std_difference": round(std_diff, 4),
+        "significant": p_value < 0.05,
+        "num_criteria": n,
+    }
 
 
 def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
@@ -164,7 +152,7 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
 
     Returns sorted list of {activity_id, activity_name, fit_score, weighted_score}.
     """
-    from models import Activity, ActivityWeight, AlternativeScore, Metric
+    from models import Activity, AlternativeScore
 
     activities = (
         db.query(Activity)

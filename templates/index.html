@@ -31,16 +31,19 @@
     {% if decisions %}
     <div class="card-grid">
         {% for decision in decisions %}
-        <a href="/decisions/{{ decision.id }}/result" class="card">
-            <div class="card-body">
+        <div class="card" style="position: relative;">
+            <a href="/decisions/{{ decision.id }}/result" class="card-body" style="display: block; text-decoration: none; color: inherit;">
                 <h3 class="card-title">{{ decision.query }}</h3>
                 <p class="card-text">{{ decision.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
                 {% if decision.category %}
                 <span class="badge badge-{{ decision.category.lower() }}">{{ decision.category }}</span>
                 {% endif %}
                 <span class="card-link">View results →</span>
-            </div>
-        </a>
+            </a>
+            <form action="/decisions/{{ decision.id }}/delete" method="POST" style="position: absolute; top: 0.5rem; right: 0.5rem;">
+                <button type="submit" class="btn btn-danger btn-sm" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; line-height: 1; border: none; border-radius: var(--radius-sm); cursor: pointer;" onclick="return confirm('Delete this decision and all its data?')" title="Delete decision">&times;</button>
+            </form>
+        </div>
         {% endfor %}
     </div>
     {% else %}

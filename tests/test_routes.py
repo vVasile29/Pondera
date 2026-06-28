@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from database import Base, get_db
-from routers import activities, metrics, candidates, analysis
+from routers import metrics
 from routers.decisions import router as decisions_router
 
 # Per-test state
@@ -48,6 +48,21 @@ def db():
     Base.metadata.create_all(bind=_test_engine)
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
     _test_session = TestSession()
+
+    # Seed universal metrics
+    from services.ontology import UNIVERSAL_DIMENSIONS
+    from models import Metric as MetricModel
+    for dim in UNIVERSAL_DIMENSIONS:
+        for m in dim["metrics"]:
+            metric = MetricModel(
+                name=m["name"],
+                category=dim["name"],
+                description=m["description"],
+                higher_is_better=m["higher_is_better"],
+            )
+            _test_session.add(metric)
+    _test_session.commit()
+
     yield _test_session
     _test_session.close()
     _test_engine.dispose()
@@ -66,10 +81,7 @@ def client(db):
     """Create a TestClient with all routes but no lifespan."""
     test_app = FastAPI(title="MetricMatch Test")
 
-    test_app.include_router(activities.router)
     test_app.include_router(metrics.router)
-    test_app.include_router(candidates.router)
-    test_app.include_router(analysis.router)
     test_app.include_router(decisions_router)
 
     # Add the main app routes (index + decide)
@@ -116,24 +128,14 @@ def client(db):
         category = parsed["category"]
         is_parsed = parsed["parsed"]
 
+        # Get all global metrics
+        all_metrics = db.query(Metric).all()
+        metric_map = {m.name: m for m in all_metrics}
+
         # Create the Decision record
         decision = Decision(query=query, category=category)
         db.add(decision)
         db.flush()
-
-        # Create Metric records for each criterion
-        metric_objects = {}
-        for crit in criteria_list:
-            metric = Metric(
-                name=crit["name"],
-                category=category,
-                description=crit["description"],
-                higher_is_better=crit["higher_is_better"],
-                decision_id=decision.id,
-            )
-            db.add(metric)
-            db.flush()
-            metric_objects[crit["name"]] = metric
 
         # Create Activity records for each alternative
         for alt_name in alternatives:
@@ -147,15 +149,19 @@ def client(db):
 
             # Create ActivityWeight records
             for crit in criteria_list:
-                metric = metric_objects[crit["name"]]
-                aw = ActivityWeight(
-                    activity_id=activity.id,
-                    metric_id=metric.id,
-                    weight=crit["default_weight"],
-                )
-                db.add(aw)
+                metric = metric_map.get(crit["name"])
+                if metric:
+                    aw = ActivityWeight(
+                        activity_id=activity.id,
+                        metric_id=metric.id,
+                        weight=crit["default_weight"],
+                    )
+                    db.add(aw)
 
         db.commit()
+
+        # Re-fetch all metrics for the template
+        all_metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
 
         return templates.TemplateResponse(
             request,
@@ -165,6 +171,7 @@ def client(db):
                 "decision": decision,
                 "alternatives": alternatives,
                 "criteria": criteria_list,
+                "all_metrics": all_metrics,
                 "category": category,
                 "parsed": is_parsed,
                 "active_page": "decisions",
@@ -185,72 +192,17 @@ def test_index_page(client, db):
     assert "What's your decision today?" in response.text
 
 
-def test_activities_page(client, db):
-    """Test activities page redirects to dashboard."""
-    response = client.get("/activities", follow_redirects=False)
-    assert response.status_code == 302
-
-
-def test_create_activity(client, db):
-    """Test creating an activity via API."""
-    response = client.post("/activities", json={
-        "name": "Test Sport",
-        "category": "Sport",
-        "description": "A test activity"
-    })
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Test Sport"
-    assert "id" in data
-
-
-def test_create_duplicate_activity(client, db):
-    """Test that duplicate activity name returns 400."""
-    client.post("/activities", json={"name": "Unique", "category": "Sport"})
-    response = client.post("/activities", json={"name": "Unique", "category": "Sport"})
-    assert response.status_code == 400
-
-
-def test_get_activity_detail(client, db):
-    """Test activity detail page loads."""
-    resp = client.post("/activities", json={"name": "Detail Test", "category": "Strategy"})
-    activity_id = resp.json()["id"]
-
-    response = client.get(f"/activities/{activity_id}")
-    assert response.status_code == 200
-    assert "Detail Test" in response.text
-
-
-def test_get_missing_activity(client, db):
-    """Test that missing activity returns 404."""
-    response = client.get("/activities/999")
-    assert response.status_code == 404
-
-
-def test_update_activity(client, db):
-    """Test updating an activity."""
-    resp = client.post("/activities", json={"name": "Old Name", "category": "Fitness"})
-    activity_id = resp.json()["id"]
-
-    response = client.put(f"/activities/{activity_id}", json={"name": "New Name"})
-    assert response.status_code == 200
-
-    # Verify via detail page
-    response = client.get(f"/activities/{activity_id}")
-    assert "New Name" in response.text
-
-
 def test_create_metric(client, db):
     """Test creating a metric via API."""
     response = client.post("/metrics", json={
         "name": "Test Metric",
-        "category": "Physical",
+        "category": "Financial",
         "unit": "cm"
     })
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Test Metric"
-    assert data["category"] == "Physical"
+    assert data["category"] == "Financial"
 
 
 def test_list_metrics(client, db):
@@ -261,7 +213,7 @@ def test_list_metrics(client, db):
 
 def test_delete_metric(client, db):
     """Test deleting a metric."""
-    resp = client.post("/metrics", json={"name": "Delete Me", "category": "Physical"})
+    resp = client.post("/metrics", json={"name": "Delete Me", "category": "Financial"})
     metric_id = resp.json()["id"]
 
     response = client.delete(f"/metrics/{metric_id}")
@@ -270,12 +222,12 @@ def test_delete_metric(client, db):
 
 def test_add_sub_metric(client, db):
     """Test adding a sub-metric."""
-    resp = client.post("/metrics", json={"name": "Parent", "category": "Physical"})
+    resp = client.post("/metrics", json={"name": "Parent", "category": "Financial"})
     parent_id = resp.json()["id"]
 
     response = client.post(f"/metrics/{parent_id}/sub", json={
         "name": "Child",
-        "category": "Physical"
+        "category": "Financial"
     })
     assert response.status_code == 200
     data = response.json()
@@ -284,105 +236,17 @@ def test_add_sub_metric(client, db):
 
 def test_add_sub_metric_to_sub_metric_fails(client, db):
     """Test that adding sub-metric to a sub-metric returns 400."""
-    resp = client.post("/metrics", json={"name": "Parent", "category": "Physical"})
+    resp = client.post("/metrics", json={"name": "Parent", "category": "Financial"})
     parent_id = resp.json()["id"]
 
-    resp = client.post(f"/metrics/{parent_id}/sub", json={"name": "Child", "category": "Physical"})
+    resp = client.post(f"/metrics/{parent_id}/sub", json={"name": "Child", "category": "Financial"})
     child_id = resp.json()["id"]
 
-    response = client.post(f"/metrics/{child_id}/sub", json={"name": "Grandchild", "category": "Physical"})
+    response = client.post(f"/metrics/{child_id}/sub", json={"name": "Grandchild", "category": "Financial"})
     assert response.status_code == 400
 
 
-def test_create_candidate(client, db):
-    """Test creating a candidate with scores."""
-    resp = client.post("/metrics", json={"name": "Height", "category": "Physical"})
-    metric_id = resp.json()["id"]
-
-    response = client.post("/candidates", json={
-        "name": "Test Candidate",
-        "scores": {str(metric_id): 85.0}
-    })
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Test Candidate"
-
-
-def test_new_candidate_form(client, db):
-    """Test candidate form page loads."""
-    response = client.get("/candidates/new")
-    assert response.status_code == 200
-
-
-def test_random_candidate(client, db):
-    """Test random candidate generation."""
-    client.post("/metrics", json={"name": "Speed", "category": "Physical"})
-
-    response = client.get("/candidates/random", follow_redirects=False)
-    assert response.status_code == 303
-
-
-def test_upsert_weights(client, db):
-    """Test upserting weights for an activity."""
-    resp = client.post("/metrics", json={"name": "Weight Metric", "category": "Physical"})
-    metric_id = resp.json()["id"]
-
-    resp = client.post("/activities", json={"name": "Weight Activity", "category": "Sport"})
-    activity_id = resp.json()["id"]
-
-    response = client.post(f"/activities/{activity_id}/weights", json={
-        "weights": [{"metric_id": metric_id, "weight": 75.0}]
-    })
-    assert response.status_code == 200
-
-
-def test_monte_carlo_page(client, db):
-    """Test Monte Carlo page loads."""
-    resp = client.post("/activities", json={"name": "MC Activity", "category": "Sport"})
-    activity_id = resp.json()["id"]
-
-    response = client.get(f"/activities/{activity_id}/mc")
-    assert response.status_code == 200
-
-
-def test_what_if(client, db):
-    """Test what-if analysis endpoint."""
-    resp = client.post("/metrics", json={"name": "WhatIf Metric", "category": "Physical"})
-    metric_id = resp.json()["id"]
-
-    resp = client.post("/candidates", json={
-        "name": "WhatIf",
-        "scores": {str(metric_id): 50.0}
-    })
-    candidate_id = resp.json()["id"]
-
-    response = client.get(f"/analysis/what-if?candidate_id={candidate_id}&metric_id={metric_id}&new_score=90")
-    assert response.status_code == 200
-    data = response.json()
-    assert "results" in data
-
-
-def test_compare_candidates(client, db):
-    """Test candidate comparison."""
-    resp = client.post("/metrics", json={"name": "Compare Metric", "category": "Physical"})
-    metric_id = resp.json()["id"]
-
-    resp1 = client.post("/candidates", json={
-        "name": "Compare A",
-        "scores": {str(metric_id): 80.0}
-    })
-    resp2 = client.post("/candidates", json={
-        "name": "Compare B",
-        "scores": {str(metric_id): 60.0}
-    })
-
-    response = client.post("/candidates/compare", json={
-        "candidate_ids": [resp1.json()["id"], resp2.json()["id"]]
-    })
-    assert response.status_code == 200
-
-
-# ── New decision flow tests ──
+# ── Decision flow tests ──
 
 def test_decide_flow_parsed(client, db):
     """Test the full decide flow with a parsable question."""
@@ -392,6 +256,67 @@ def test_decide_flow_parsed(client, db):
     assert "Decision Review" in response.text
     assert "house" in response.text.lower() or "House" in response.text
     assert "apartment" in response.text.lower() or "Apartment" in response.text
+
+
+def test_decide_flow_with_do_verb(client, db):
+    """'should I do X or Y' correctly extracts Aikido and Football."""
+    response = client.post("/decide", data={"q": "should I do aikido or football"})
+    assert response.status_code == 200
+    assert "Decision Review" in response.text
+    assert "Aikido" in response.text or "aikido" in response.text
+    assert "Football" in response.text or "football" in response.text
+
+
+def test_review_page_get(client, db):
+    """GET /decisions/{id}/review returns the review page."""
+    # Create a decision first
+    resp = client.post("/decide", data={"q": "Tea or Coffee?"})
+    assert resp.status_code == 200
+    import re
+    match = re.search(r'/decisions/(\d+)/refine', resp.text)
+    assert match
+    decision_id = int(match.group(1))
+
+    # GET the review page
+    review_resp = client.get(f"/decisions/{decision_id}/review")
+    assert review_resp.status_code == 200
+    assert "Decision Review" in review_resp.text
+    assert "Tea" in review_resp.text or "tea" in review_resp.text
+    assert "Coffee" in review_resp.text or "coffee" in review_resp.text
+
+
+def test_delete_decision(client, db):
+    """POST /decisions/{id}/delete removes the decision and redirects."""
+    # Create a decision with refine + scores
+    resp = client.post("/decide", data={"q": "Tea or Coffee?"})
+    assert resp.status_code == 200
+    import re
+    match = re.search(r'/decisions/(\d+)/refine', resp.text)
+    assert match
+    decision_id = int(match.group(1))
+
+    # Verify it exists
+    from models import Decision
+    assert db.query(Decision).filter(Decision.id == decision_id).first() is not None
+
+    # Delete it (don't follow redirect — we want the 303)
+    del_resp = client.post(f"/decisions/{decision_id}/delete", follow_redirects=False)
+    assert del_resp.status_code == 303  # redirect
+
+    # Verify it's gone
+    assert db.query(Decision).filter(Decision.id == decision_id).first() is None
+
+
+def test_delete_decision_not_found(client, db):
+    """POST /decisions/99999/delete returns 404."""
+    resp = client.post("/decisions/99999/delete")
+    assert resp.status_code == 404
+
+
+def test_review_page_not_found(client, db):
+    """GET /decisions/99999/review returns 404."""
+    resp = client.get("/decisions/99999/review")
+    assert resp.status_code == 404
 
 
 def test_decision_list_page(client, db):
@@ -406,30 +331,27 @@ def test_decision_refine_and_score(client, db):
     resp = client.post("/decide", data={"q": "House or Apartment?"})
     assert resp.status_code == 200
 
-    # Extract decision ID from the response - look for it in form action
+    # Extract decision ID from the response
     import re
     match = re.search(r'/decisions/(\d+)/refine', resp.text)
     assert match, "Could not find decision ID in response"
     decision_id = int(match.group(1))
 
-    # Refine the decision
+    # Get metric IDs from the seeded metrics
+    from models import Metric
+    metrics = db.query(Metric).all()
+    metric_id = metrics[0].id if metrics else 1
+
+    # Refine the decision using global metric IDs
     refine_resp = client.post(
         f"/decisions/{decision_id}/refine",
         data={
             "alt_name_0": "House",
             "alt_name_1": "Apartment",
-            "criterion_name_0": "Cost",
-            "criterion_desc_0": "How much it costs",
+            "metric_id_0": str(metric_id),
+            "include_metric_0": "true",
             "criterion_weight_0": "80",
             "criterion_higher_0": "false",
-            "criterion_name_1": "Location",
-            "criterion_desc_1": "Where it is",
-            "criterion_weight_1": "70",
-            "criterion_higher_1": "true",
-            "criterion_name_2": "Space",
-            "criterion_desc_2": "Size of the place",
-            "criterion_weight_2": "60",
-            "criterion_higher_2": "true",
         },
         follow_redirects=False,
     )
@@ -442,6 +364,38 @@ def test_decision_refine_and_score(client, db):
         score_resp = refine_resp
     assert score_resp.status_code == 200
     assert "Score Your Alternatives" in score_resp.text or "Rate each alternative" in score_resp.text
+
+
+def test_refine_with_native_form_values(client, db):
+    """Refine must accept 'on' as checkbox value (native HTML form submission)."""
+    resp = client.post("/decide", data={"q": "X or Y?"})
+    assert resp.status_code == 200
+    import re
+    match = re.search(r'/decisions/(\d+)/refine', resp.text)
+    assert match
+    decision_id = int(match.group(1))
+
+    from models import Metric
+    metrics = db.query(Metric).order_by(Metric.id).all()
+    assert len(metrics) >= 2
+
+    # Submit with 'on' (native browser behavior) instead of 'true' (Alpine.js)
+    refine_resp = client.post(
+        f"/decisions/{decision_id}/refine",
+        data={
+            "alt_name_0": "X",
+            "alt_name_1": "Y",
+            "include_metric_0": "on",
+            "metric_id_0": str(metrics[0].id),
+            "criterion_weight_0": "80",
+            "include_metric_1": "on",
+            "metric_id_1": str(metrics[1].id),
+            "criterion_weight_1": "70",
+        },
+        follow_redirects=False,
+    )
+    # Should redirect to scoring, not re-render with error
+    assert refine_resp.status_code in (200, 303), f"Expected redirect, got {refine_resp.status_code}"
 
 
 def test_ontology_parsing(client, db):
@@ -478,40 +432,50 @@ def test_full_decision_flow(client, db):
     assert match, "No decision ID in /decide response"
     decision_id = int(match.group(1))
 
-    # Step 2: Refine with 2 alternatives, 3 criteria
+    # Get metric IDs from seeded metrics
+    from models import Metric
+    all_metrics = db.query(Metric).order_by(Metric.id).all()
+    assert len(all_metrics) >= 2
+
+    # Step 2: Refine with 2 alternatives, 3 metrics
     refine_resp = client.post(
         f"/decisions/{decision_id}/refine",
         data={
             "alt_name_0": "Tea",
             "alt_name_1": "Coffee",
-            "criterion_name_0": "Taste",
-            "criterion_desc_0": "Flavor profile",
+            "metric_id_0": str(all_metrics[0].id),
+            "include_metric_0": "true",
             "criterion_weight_0": "85",
             "criterion_higher_0": "true",
-            "criterion_name_1": "Caffeine",
-            "criterion_desc_1": "Energy boost",
+            "metric_id_1": str(all_metrics[1].id),
+            "include_metric_1": "true",
             "criterion_weight_1": "70",
             "criterion_higher_1": "true",
-            "criterion_name_2": "Cost",
-            "criterion_desc_2": "Price per serving",
+            "metric_id_2": str(all_metrics[2].id),
+            "include_metric_2": "true",
             "criterion_weight_2": "50",
             "criterion_higher_2": "false",
         },
     )
     assert refine_resp.status_code in (200, 303)
 
+    # Follow redirect
+    if refine_resp.status_code == 303:
+        client.get(refine_resp.headers["location"])
+
     # Step 3: Score page should load
     score_page = client.get(f"/decisions/{decision_id}/score")
     assert score_page.status_code == 200
     assert "Score Your Alternatives" in score_page.text
     # Should show both alternatives and all criteria
-    for s in ["Tea", "Coffee", "Taste", "Caffeine", "Cost"]:
+    for s in ["Tea", "Coffee"]:
         assert s in score_page.text
+    for m in all_metrics[:3]:
+        assert m.name in score_page.text
 
     # Step 4: Submit scores
-    # Extract the field names from the score page
     score_fields = re.findall(r'name="(score_\d+_\d+)"', score_page.text)
-    assert len(score_fields) == 6, f"Expected 6 score fields, got {score_fields}: {len(score_fields)}"
+    assert len(score_fields) == 6, f"Expected 6 score fields, got {len(score_fields)}"
 
     score_data = {}
     for field in score_fields:
@@ -530,7 +494,6 @@ def test_full_decision_flow(client, db):
     assert "Results" in result_page.text
     assert "Ranking" in result_page.text
     assert "Detailed Scores" in result_page.text
-    # Should show percentages
     assert "%" in result_page.text
 
 
@@ -545,7 +508,6 @@ def test_decide_no_match(client, db):
     """Test /decide with a query that has no or/vs pattern."""
     response = client.post("/decide", data={"q": "What should I do today?"})
     assert response.status_code == 200
-    # Should still show review page with generic alternatives
     assert "Decision Review" in response.text or "decision" in response.text.lower()
 
 
@@ -555,60 +517,24 @@ def test_metrics_page_requires_no_auth(client, db):
     assert response.status_code == 200
 
 
-def test_suggest_metric(client, db):
-    """Test metric suggestion endpoint."""
-    resp = client.post("/metrics", json={"name": "SuggestTest", "category": "Physical"})
-    metric_id = resp.json()["id"]
-
-    response = client.get(f"/metrics/{metric_id}/suggest")
-    assert response.status_code == 200
-
-
 def test_update_metric(client, db):
     """Test updating a metric."""
-    resp = client.post("/metrics", json={"name": "UpdateMe", "category": "Physical"})
+    resp = client.post("/metrics", json={"name": "UpdateMe", "category": "Financial"})
     metric_id = resp.json()["id"]
 
     response = client.put(f"/metrics/{metric_id}", json={
         "name": "Updated",
-        "category": "Mental"
+        "category": "Quality"
     })
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Updated"
 
 
-def test_delete_candidate(client, db):
-    """Test deleting a candidate."""
-    resp = client.post("/metrics", json={"name": "DelMetric", "category": "Physical"})
-    metric_id = resp.json()["id"]
-
-    resp = client.post("/candidates", json={
-        "name": "DeleteMe",
-        "scores": {str(metric_id): 50.0}
-    })
-    candidate_id = resp.json()["id"]
-
-    response = client.delete(f"/candidates/{candidate_id}")
+def test_seeded_metrics_on_list_page(client, db):
+    """Test that seeded universal metrics show on the metrics page."""
+    response = client.get("/metrics")
     assert response.status_code == 200
-
-
-def test_candidate_detail(client, db):
-    """Test candidate detail page."""
-    resp = client.post("/metrics", json={"name": "CDMetric", "category": "Physical"})
-    metric_id = resp.json()["id"]
-
-    resp = client.post("/candidates", json={
-        "name": "DetailCheck",
-        "scores": {str(metric_id): 75.0}
-    })
-    candidate_id = resp.json()["id"]
-
-    response = client.get(f"/candidates/{candidate_id}")
-    assert response.status_code == 200
-
-
-def test_candidate_list(client, db):
-    """Test candidate list loads."""
-    response = client.get("/candidates")
-    assert response.status_code == 200
+    # Should show dimension names
+    for dim_name in ["Financial", "Quality", "Time", "Risk", "Experience", "Convenience"]:
+        assert dim_name in response.text

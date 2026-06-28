@@ -9,17 +9,27 @@
         <span class="badge badge-{{ category.lower() }}">{{ category }}</span>
         {% endif %}
     </div>
+    <div class="detail-actions">
+        <form action="/decisions/{{ decision.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this decision and all its data?')">
+            <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+    </div>
 </div>
 
 {% if parsed %}
 <div class="insight-callout">
-    We detected <strong>{{ alternatives|length }}</strong> alternatives and <strong>{{ criteria|length }}</strong> criteria.
-    Review and adjust them below, then continue to scoring.
+    We detected <strong>{{ alternatives|length }}</strong> alternatives. Select criteria below, then continue to scoring.
 </div>
 {% else %}
 <div class="insight-callout">
     We couldn't automatically identify alternatives in your question. We've created placeholders — edit them below.
     Make sure to phrase comparisons like "X or Y" for best results.
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert alert-danger" style="background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 1rem;">
+    {{ error }}
 </div>
 {% endif %}
 
@@ -51,7 +61,7 @@
     <section class="section">
         <div class="section-header">
             <h2>Criteria</h2>
-            <button type="button" class="btn btn-secondary" @click="addCriterion()">+ Add Criterion</button>
+            <p class="text-muted">Select from universal criteria and adjust weights.</p>
         </div>
 
         <div>
@@ -59,25 +69,23 @@
                 <div class="metric-group" style="margin-bottom: 0.5rem;">
                     <div class="metric-group-body" style="padding: 0.75rem 1rem;">
                         <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
-                            <div style="flex: 2; min-width: 140px;">
-                                <label style="font-size: 0.75rem; color: var(--text-muted);">Name</label>
+                            <div style="min-width: 30px;">
                                 <input
-                                    type="text"
-                                    :name="'criterion_name_' + index"
-                                    x-model="crit.name"
-                                    class="form-input"
-                                    placeholder="e.g. Cost"
+                                    type="checkbox"
+                                    :name="'include_metric_' + index"
+                                    x-model="crit.include"
+                                    true-value="true"
+                                    false-value="false"
                                 >
                             </div>
-                            <div style="flex: 3; min-width: 200px;">
-                                <label style="font-size: 0.75rem; color: var(--text-muted);">Description</label>
+                            <div style="flex: 2; min-width: 140px;">
                                 <input
-                                    type="text"
-                                    :name="'criterion_desc_' + index"
-                                    x-model="crit.description"
-                                    class="form-input"
-                                    placeholder="e.g. Total cost including fees"
+                                    type="hidden"
+                                    :name="'metric_id_' + index"
+                                    x-model="crit.metric_id"
                                 >
+                                <label style="font-weight: 600;" x-text="crit.name"></label>
+                                <br><span style="font-size: 0.75rem; color: var(--text-muted);" x-text="crit.description"></span>
                             </div>
                             <div style="min-width: 120px;">
                                 <label style="font-size: 0.75rem; color: var(--text-muted);">
@@ -104,7 +112,6 @@
                                     Higher is better
                                 </label>
                             </div>
-                            <button type="button" class="btn btn-danger" @click="removeCriterion(index)" x-show="criteria.length > 2">✕</button>
                         </div>
                     </div>
                 </div>
@@ -129,10 +136,12 @@ function reviewForm() {
         criteria: [
             {% for c in criteria %}
             {
+                metric_id: {{ c.id if c.id is defined else c.get('id', '')|tojson }},
                 name: {{ c.name|tojson }},
                 description: {{ c.description|tojson }},
                 default_weight: {{ c.default_weight|tojson }},
-                higher_is_better: {{ c.higher_is_better|tojson }},
+                higher_is_better: {% if c.higher_is_better is defined %}{{ c.higher_is_better|tojson }}{% else %}true{% endif %},
+                include: {% if c.include is defined and not c.include %}false{% else %}true{% endif %},
             },
             {% endfor %}
         ],
@@ -144,19 +153,6 @@ function reviewForm() {
                 this.alternatives.splice(index, 1);
             }
         },
-        addCriterion() {
-            this.criteria.push({
-                name: '',
-                description: '',
-                default_weight: 50,
-                higher_is_better: true,
-            });
-        },
-        removeCriterion(index) {
-            if (this.criteria.length > 2) {
-                this.criteria.splice(index, 1);
-            }
-        }
     }
 }
 </script>
