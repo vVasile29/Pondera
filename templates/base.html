@@ -11,8 +11,8 @@
 <body>
     <nav class="nav" x-data="{ mobileOpen: false }">
         <div class="nav-inner">
-            <a href="/" class="nav-brand">Pondera</a>
-            <button class="nav-toggle" @click="mobileOpen = !mobileOpen" aria-label="Toggle menu">
+            <a href="/" class="nav-brand"><span class="nav-brand-mark">P</span>Pondera</a>
+            <button class="nav-toggle" @click="mobileOpen = !mobileOpen" aria-label="Toggle menu" :aria-expanded="mobileOpen.toString()">
                 <span></span><span></span><span></span>
             </button>
             <div class="nav-links" :class="{ 'open': mobileOpen }">
@@ -28,7 +28,10 @@
     </main>
 
     <footer class="footer">
-        <p>Pondera — Multi-Attribute Decision Engine</p>
+        <div class="footer-inner">
+            <p><strong>Pondera</strong> — Multi-Attribute Decision Engine</p>
+            <p>Structured MCDA workflows for comparing, diagnosing, screening, and ranking options.</p>
+        </div>
     </footer>
 </body>
 </html>

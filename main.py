@@ -92,6 +92,13 @@ async def decide(request: Request, db: Session = Depends(get_db)):
 
     if not query:
         decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
+        for d in decisions:
+            mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
+            d.result_url = {
+                "diagnose": f"/evaluate/{d.id}/result",
+                "screen": f"/screen/{d.id}/result",
+                "rank": f"/rank/{d.id}/result",
+            }.get(mode, f"/decisions/{d.id}/result")
         return templates.TemplateResponse(
             request,
             "index.html",
