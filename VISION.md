@@ -1,204 +1,173 @@
-# Pondera — Dynamic Decision Engine
+# Pondera - Product Vision
 
-## What we are building
+## What We Are Building
 
-A **universal multi-criteria decision analysis (MCDA) engine** that can answer
-any structured decision question. One scoring core. Many question modes.
+Pondera is a universal multi-criteria decision analysis (MCDA) engine with one
+simple entry point: type a decision question, review the parsed structure, score
+the options, and inspect the result.
 
-The engine is **not** an expert system — it does not know domain facts. Instead
-it provides a structured framework for people to think through decisions
-systematically, using academically validated criteria.
+The product is not an expert system and does not claim domain facts. It gives
+people a transparent framework for thinking through decisions using explicit
+criteria, weights, scores, and tradeoffs.
+
+The current product direction is **one unified prompt entry**, not a public set
+of modes. Internally, Pondera infers the decision shape from the prompt:
+
+| Prompt shape | Internal flow | Example |
+|--------------|---------------|---------|
+| One option or subject | Diagnosis | "How good is a Tesla for commuting?" |
+| Two options | Comparison | "House or apartment?" |
+| Three or more options | Ranking | "Rank Python, Java, Go" |
+
+Thresholds are not a separate public mode anymore. They are a post-hoc filter on
+result pages: score first, then apply must-have cutoffs to see PASS/FAIL options
+and ranked survivors.
 
 ---
 
-## Academic foundation
+## Academic Foundation
 
 | Source | What we use |
 |--------|-------------|
-| **Keeney's Value-Focused Thinking** (1992) | Values-first: define what matters before evaluating alternatives |
-| **Belton & Stewart's MCDA Framework** (2002) | The 6 universal value dimensions + weighted sum model |
-| **Roy's Problem Typology** (1996) | The 4 canonical question types (Choice, Sorting, Ranking, Description) |
-| **Tversky's Elimination by Aspects** (1972) | Threshold-based screening logic |
-| **Student's t-test** | Statistical significance of score differences |
+| Keeney's Value-Focused Thinking | Values-first framing: make what matters explicit before evaluating alternatives |
+| MCDA weighted-sum models | Weighted scoring across multiple criteria |
+| Roy's decision problem typology | Internal interpretation of choice, ranking, and description/diagnosis shapes |
+| Elimination by Aspects | Threshold-style filtering after scores exist |
 
-### The 6 Universal Dimensions
+These sources guide the product, but Pondera should be described as grounded in
+or inspired by MCDA principles, not as academically certified advice.
 
-These are the minimum criteria set that applies to **any** decision. They never
-change — they are the foundation.
+### The Universal Criteria Framework
+
+The criteria set is intentionally small and reusable. Metrics are global and
+pre-seeded, not created separately for each decision.
 
 | Dimension | Metrics | Direction |
 |-----------|---------|-----------|
-| Financial | Cost, Value | ↓ Cost, ↑ Value |
-| Quality | Quality, Performance | ↑ both |
-| Time | Time Required, Efficiency | ↓ Time, ↑ Efficiency |
-| Risk | Risk, Safety | ↓ Risk, ↑ Safety |
-| Experience | Enjoyment, Satisfaction | ↑ both |
-| Convenience | Convenience, Accessibility | ↑ both |
+| Financial | Cost, Value | Lower Cost, higher Value |
+| Quality | Quality, Performance | Higher is better |
+| Time | Time Required, Efficiency | Lower Time Required, higher Efficiency |
+| Risk | Risk, Safety | Lower Risk, higher Safety |
+| Experience | Enjoyment, Satisfaction | Higher is better |
+| Convenience | Convenience, Accessibility | Higher is better |
 
 ---
 
-## The 7 Canonical Modes
+## Current Product Model
 
-One engine, multiple modes. Each mode maps to an academically recognized
-decision problem type. Each mode adds only a parser + UI — the core scoring
-algorithm, 6 dimensions, and database models stay the same.
+### Unified Entry
 
-### Mode 1: CHOOSE (P.α) — ✅ Live
-**Problem:** Select the best from a set.
-**Input:** "X or Y?" or "Which Z should I pick?"
-**Output:** Ranked alternatives with fit scores.
-**Current status:** Fully implemented. Parses "or"/"vs"/"versus", extracts
-alternatives, scores against universal criteria, shows ranking + radar chart
-+ t-test significance.
+The landing page asks one question: "What's your decision today?" There is no
+mode picker. The parser extracts alternatives or a single subject, then routes to
+the appropriate internal flow.
 
-### Mode 2: DIAGNOSE (P.δ) — 🔶 Next (~2 days)
-**Problem:** Evaluate a single option against a goal.
-**Input:** "How good is X for Y?" or just "Rate my X".
-**Parser:** Extract single subject + optional goal context. Map to criteria.
-**Output:** Single score + dimension-by-dimension breakdown + gap analysis
-("you're strong in Quality but weak in Cost").
-**New code:** `routers/evaluate.py`, `templates/evaluate_result.html`, parser
-extension.
+### Review Before Scoring
 
-### Mode 3: SCREEN (P.β) — 🔲 Phase 2 (~1 week)
-**Problem:** Which options meet my minimum requirements?
-**Input:** Options + per-criterion thresholds ("Cost ≤ 60, Quality ≥ 70").
-**Parser:** Extract alternatives + threshold constraints from structured input
-or free text.
-**Logic:** Elimination by Aspects — filter out any alternative that fails one
-or more thresholds. Remaining alternatives enter CHOOSE scoring.
-**Output:** Pass/fail per alternative + ranked survivors.
-**New code:** Threshold UI on review page, elimination step in scoring pipeline.
+The user sees what the system parsed before scoring. They can edit alternatives,
+select metrics, and adjust weights. This is where Pondera stays transparent: the
+model is inspectable before it produces an answer.
 
-### Mode 4: RANK (P.γ) — 🔲 Phase 2 (mostly works)
-**Problem:** Order N alternatives from best to worst.
-**Input:** Free-text list or manual entry of 3+ options.
-**Parser:** No "or" needed — user provides alternatives directly.
-**Output:** Full ranking with fit scores. Radar chart already handles N
-alternatives.
-**New code:** Alternative input UI (add/remove rows), parser handles list
-format.
+### Score on a 0-100 Scale
 
-### Mode 5: PRESCRIBE (Design/Optimization) — 🔲 Phase 3 (~2 weeks)
-**Problem:** What would the ideal look like?
-**Input:** User sets ideal weights/priorities. No alternatives needed.
-**Logic:** Generate the optimal hypothetical profile (Keeney's value-focused
-thinking — values first, alternatives second). Then score real alternatives
-against this ideal using a similarity/distance metric.
-**Output:** Radar showing the ideal profile + how close each alternative comes.
-**New code:** Ideal-profile builder, similarity scoring, comparison view.
+Alternatives are scored against selected metrics with sliders. Weights and scores
+both use a 0-100 scale.
 
-### Mode 6: PROJECT (Dynamic/Longitudinal) — 🔲 Phase 4 (~1 month)
-**Problem:** Will this still be good in 3 years?
-**Input:** Same as CHOOSE or DIAGNOSE, plus a time horizon.
-**Logic:** Each criterion gets a trend slider (-10 to +10 per year). Score is
-computed at multiple time points. The ranking shows how it shifts over time.
-**Output:** Animated radar chart at T₀, T₁, T₂ + trajectory lines.
-**New code:** Time-horizon input, trend computation, animated chart render.
+### Results and Threshold Filters
 
-### Mode 7: ALLOCATE (Portfolio) — 🔲 Phase 5 (~2 months)
-**Problem:** How should I distribute a limited resource?
-**Input:** Alternatives + scores + resource budget (money, time, effort).
-**Logic:** Knapsack optimization — find the optimal combination of alternatives
-that maximizes total weighted score within budget.
-**Output:** Recommended portfolio + trade-off analysis.
-**New code:** Budget input, optimization solver, portfolio result view.
+Results show weighted fit scores, radar charts, and detailed score tables. The
+result page can also apply threshold filters, such as `Cost <= 60` or
+`Safety >= 80`, to separate passing and failing alternatives. Threshold filters
+operate on user-entered scores; they do not fetch external facts.
+
+### Compatibility
+
+Older stored decisions may still have `mode` values such as `diagnose`, `screen`,
+or `rank`. Those values and routes remain supported for existing decisions, but
+they are not the public product model.
 
 ---
 
-## Architecture principles
+## Architecture Principles
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Question Input                  │
-│  (free text / structured / sliders / uploads)    │
-└──────────────────────┬──────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────┐
-│              Intent Classifier                   │
-│  Maps input → one of 7 modes based on pattern   │
-│  "X or Y" → CHOOSE | "Rate X" → DIAGNOSE | etc  │
-└──────────────────────┬──────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────┐
-│                Parser Layer                      │
-│  Extracts: alternatives, criteria, thresholds,   │
-│  constraints, time horizon, budget              │
-└──────────────────────┬──────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────┐
-│          ★ Core MCDA Engine ★                   │
-│  ┌────────────┐  ┌──────────┐  ┌────────────┐  │
-│  │  6 Dims    │  │ Weighted │  │ Statistical│  │
-│  │ + 12 Mets  │  │  Sum     │  │ Tests      │  │
-│  └────────────┘  └──────────┘  └────────────┘  │
-└──────────────────────┬──────────────────────────┘
-                       │
-┌──────────────────────▼──────────────────────────┐
-│           Result Presentation Layer              │
-│  Ranking / Diagnosis / Screen / Prescribe / etc  │
-│  Radar chart + scores + narrative + t-test      │
-└─────────────────────────────────────────────────┘
+Question Input
+  -> Parser
+     -> alternatives / single subject / list structure
+  -> Internal Routing
+     -> 1 option: diagnosis
+     -> 2 options: comparison
+     -> 3+ options: ranking
+  -> Review
+     -> alternatives, metrics, weights
+  -> Score
+     -> 0-100 criterion scores
+  -> Results
+     -> fit scores, radar chart, score table
+     -> optional threshold filtering
 ```
 
-### What stays constant across all modes
+### What Stays Constant
 
-- The 6 MCDA dimensions and 12 metrics (in `services/ontology.py`)
-- The weighted-sum scoring algorithm (in `services/scoring.py`)
-- The database models (`Decision`, `Activity`, `ActivityWeight`, `AlternativeScore`)
-- The metric manager CRUD (`routers/metrics.py`)
-- The t-test significance computation
-- The radar chart (Chart.js)
-- Alpine.js reactive UI (no npm)
-- Per-(alternative, criterion) sliders at 0–100
+- 6 value dimensions and 12 global metrics
+- Weighted-sum scoring
+- `Decision`, `Activity`, `ActivityWeight`, and `AlternativeScore` models
+- Metric manager CRUD
+- Radar chart presentation
+- Jinja2 + Alpine.js + Chart.js, with no npm build step
+- User-controlled criteria, weights, and scores
 
-### What changes per mode
+### What Can Vary Internally
 
-| Layer | What differs |
-|-------|-------------|
-| **Parser** | How alternatives are extracted (from "or", from list, from single target, etc.) |
-| **Input UI** | Additional fields per mode: thresholds, time horizon, budget, ideal profile |
-| **Score computation** | Mode-specific logic: filtering, ideal-distance, time-trend, portfolio optimization |
-| **Result template** | Each mode gets its own result view |
-| **Router** | Each mode adds a router under `routers/` |
-
----
-
-## Technology constants
-
-| Layer | Choice |
-|-------|--------|
-| Backend | Python FastAPI |
-| Database | SQLAlchemy + SQLite (dev) → PostgreSQL (prod) |
-| Frontend | Jinja2 + Alpine.js + Chart.js (CDN, zero npm) |
-| Testing | pytest + httpx |
-| Scoring | Weighted sum (MCDA standard) + paired t-test |
-| Significance | Student's t-distribution (hand-rolled CDF) |
+| Layer | Variation |
+|-------|-----------|
+| Parser | Extracts alternatives from `or`/`vs`, lists, or single-subject prompts |
+| Review UI | Shows one, two, or many alternatives as needed |
+| Result UI | Emphasizes diagnosis, comparison, or ranking depending on the decision shape |
+| Filters | Optional thresholds can be applied after scoring |
 
 ---
 
 ## Roadmap
 
-```
-Phase 0 (done)      CHOOSE              Single pairwise comparison
-Phase 1 (2 days)    DIAGNOSE            Single-option evaluation
-Phase 2 (1 week)    SCREEN + RANK       Thresholds + multi-option ranking
-Phase 3 (2 weeks)   PRESCRIBE           Ideal profile + gap analysis
-Phase 4 (1 month)   PROJECT             Time-weighted projections
-Phase 5 (2 months)  ALLOCATE            Portfolio / resource optimization
-```
+The roadmap should build on the unified entry model rather than adding more
+public modes.
 
-Each phase is additive. Modes never need to be rewritten — the core engine
-evolves forward.
+### Current
+
+- Unified prompt entry
+- Automatic diagnosis/comparison/ranking detection
+- Universal MCDA metric framework
+- Weighted scoring and radar chart results
+- Saved decisions
+- Post-hoc threshold filtering on result pages
+- Legacy screen/rank/evaluate routes for compatibility
+
+### Near Term
+
+- Improve parser reliability for messy natural language and list formats
+- Make threshold filters easier to understand and edit on result pages
+- Reduce duplication between comparison, ranking, and diagnosis result handling
+- Improve empty and ambiguous prompt guidance
+- Clean up dead CSS and legacy mode language in UI internals
+
+### Later Possibilities
+
+- Ideal-profile comparison: define what "ideal" looks like and score options against it
+- Time horizon analysis: let users explore how scores might change over time
+- Portfolio/resource allocation: choose combinations under a budget or constraint
+- Collaboration or export features for sharing decision rationale
+
+These should be introduced as capabilities inside the unified flow where possible,
+not as a growing set of public modes.
 
 ---
 
-## Boundaries (what we do not do)
+## Boundaries
 
 | Not in scope | Reason |
-|-------------|--------|
-| Domain-specific deep expertise | Our criteria are universal by design. Domain depth requires expert systems, not MCDA. |
-| Probabilistic uncertainty | Decision trees, Bayesian nets, and Monte Carlo are adjacent fields — we do the scoring, not the probability modeling. |
-| Group decision consensus | No voting/negotiation logic. Each decision is one person's perspective. |
-| Real-time data feeds | No live API integrations for prices, ratings, etc. User provides their own scores. |
-| Full text LLM reasoning | We parse structure, we do not generate free-text advice. The framework is the advice. |
+|--------------|--------|
+| Domain-specific factual advice | Pondera structures judgment; it does not know live prices, reviews, or expert facts |
+| Real-time data feeds | Users provide scores based on their own information |
+| Black-box recommendations | The criteria, weights, and scores should remain visible and editable |
+| Full LLM reasoning | The framework is the advice; the app parses structure rather than generating persuasive prose |
+| Group consensus workflows | Current decisions represent one user's perspective |

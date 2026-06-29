@@ -238,34 +238,6 @@ body:has(.landing-hero) .main {
     margin-bottom: 0.75rem;
 }
 
-.mode-picker {
-    display: inline-flex;
-    gap: 0.25rem;
-    padding: 0.25rem;
-    margin-bottom: 1rem;
-    background: var(--secondary);
-    border: 1px solid var(--border);
-    border-radius: 9999px;
-}
-
-.mode-pill {
-    border: 0;
-    background: transparent;
-    color: var(--text-muted);
-    padding: 0.5rem 0.875rem;
-    border-radius: 9999px;
-    font-size: 0.875rem;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.mode-pill.active,
-.mode-pill:hover {
-    background: var(--bg-card);
-    color: var(--text);
-    box-shadow: var(--shadow);
-}
-
 .landing-form {
     margin: 0;
     max-width: 760px;
@@ -1323,13 +1295,6 @@ textarea.form-input {
 
     .landing-hero {
         padding-top: 1.5rem;
-    }
-
-    .mode-picker {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        border-radius: var(--radius);
-        width: 100%;
     }
 
     .landing-form {
