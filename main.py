@@ -1,13 +1,13 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from routers import metrics
+from routers.api import router as api_router
 from routers.decisions import router as decisions_router
 from routers.evaluate import router as evaluate_router
 from routers.screen import router as screen_router
@@ -45,17 +45,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Pondera", lifespan=lifespan)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# CORS — allow the Vite dev server origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Include routers
 app.include_router(metrics.router)
+app.include_router(api_router)
 app.include_router(decisions_router)
 app.include_router(evaluate_router)
 app.include_router(screen_router)
 app.include_router(rank_router)
-
-templates = Jinja2Templates(directory="templates")
 
 if __name__ == "__main__":
     import uvicorn
@@ -63,23 +68,28 @@ if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 def index(request: Request, db: Session = Depends(get_db)):
     from models import Decision
 
     decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
+    result = []
     for d in decisions:
         mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
-        d.result_url = {
+        result_url = {
             "diagnose": f"/evaluate/{d.id}/result",
             "screen": f"/screen/{d.id}/result",
             "rank": f"/rank/{d.id}/result",
         }.get(mode, f"/decisions/{d.id}/result")
-    return templates.TemplateResponse(
-        request,
-        "index.html",
-        {"request": request, "decisions": decisions, "active_page": "home"},
-    )
+        result.append({
+            "id": d.id,
+            "query": d.query,
+            "mode": mode,
+            "category": d.category,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+            "result_url": result_url,
+        })
+    return {"decisions": result}
 
 
 @app.post("/decide")
@@ -106,24 +116,9 @@ async def decide(request: Request, db: Session = Depends(get_db)):
                 )
 
     if not query:
-        decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
-        for d in decisions:
-            m = d.mode if hasattr(d, "mode") and d.mode else "choose"
-            d.result_url = {
-                "diagnose": f"/evaluate/{d.id}/result",
-                "screen": f"/screen/{d.id}/result",
-                "rank": f"/rank/{d.id}/result",
-            }.get(m, f"/decisions/{d.id}/result")
-        return templates.TemplateResponse(
-            request,
-            "index.html",
-            {
-                "request": request,
-                "decisions": decisions,
-                "query": query,
-                "error": "Please enter a question.",
-                "active_page": "home",
-            },
+        return JSONResponse(
+            {"error": "Please enter a question."},
+            status_code=400,
         )
 
     # ── Heuristic routing (auto-detect mode from query) ──
@@ -206,16 +201,13 @@ async def decide(request: Request, db: Session = Depends(get_db)):
             }
         )
 
-    return templates.TemplateResponse(
-        request,
-        "decision_review.html",
-        {
-            "request": request,
-            "decision": decision,
-            "alternatives": alternatives,
-            "criteria": criteria_with_ids,
-            "category": category,
-            "parsed": is_parsed,
-            "active_page": "decisions",
-        },
-    )
+    return {
+        "decision_id": decision.id,
+        "mode": decision.mode if decision.mode else "choose",
+        "query": decision.query,
+        "category": category,
+        "alternatives": alternatives,
+        "criteria": criteria_with_ids,
+        "parsed": is_parsed,
+        "redirect_url": f"/decisions/{decision.id}/review",
+    }

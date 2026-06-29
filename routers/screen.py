@@ -1,10 +1,10 @@
 """SCREEN (Mode 3) — Threshold-based elimination router."""
 
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -17,7 +17,36 @@ from services.scoring import (
 )
 
 router = APIRouter(prefix="/screen", tags=["screen"])
-templates = Jinja2Templates(directory="templates")
+
+
+def _serialize(obj):
+    if obj is None:
+        return None
+    if hasattr(obj, "__table__"):
+        return {c.name: _serialize(getattr(obj, c.name)) for c in obj.__table__.columns}
+    if isinstance(obj, (int, float, str, bool)):
+        return obj
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    try:
+        return str(obj)
+    except Exception:
+        return None
+
+
+class JsonTemplates:
+    @staticmethod
+    def TemplateResponse(request, name, context):
+        data = {k: _serialize(v) for k, v in context.items() if k != "request"}
+        data["_template"] = name
+        return JSONResponse(content=data)
+
+
+templates = JsonTemplates()
 
 
 def safe_delete_redirect(redirect: str | None) -> str:
@@ -57,7 +86,7 @@ def _markdown_response(decision_id: int, db: Session) -> Response:
     )
 
 
-@router.post("", response_class=HTMLResponse)
+@router.post("")
 async def screen_create(request: Request, db: Session = Depends(get_db)):
     """Entry point — parse query, extract thresholds, create Decision, redirect to review."""
     from services.ontology import UNIVERSAL_METRICS
@@ -136,7 +165,7 @@ async def screen_create(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url=f"/screen/{decision.id}/review", status_code=303)
 
 
-@router.get("/{decision_id}/review", response_class=HTMLResponse)
+@router.get("/{decision_id}/review")
 def screen_review(request: Request, decision_id: int, db: Session = Depends(get_db)):
     """Review page — shows alternatives, criteria, and threshold sliders."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
@@ -246,7 +275,7 @@ def _compute_screen_validation(query: str, metric_map: dict) -> dict:
     return validation
 
 
-@router.post("/{decision_id}/refine", response_class=HTMLResponse)
+@router.post("/{decision_id}/refine")
 async def screen_refine(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
@@ -408,7 +437,7 @@ async def screen_refine(
     return RedirectResponse(url=f"/screen/{decision_id}/score", status_code=303)
 
 
-@router.get("/{decision_id}/score", response_class=HTMLResponse)
+@router.get("/{decision_id}/score")
 def screen_score_page(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
@@ -487,7 +516,7 @@ def screen_score_page(
     )
 
 
-@router.post("/{decision_id}/score", response_class=HTMLResponse)
+@router.post("/{decision_id}/score")
 async def screen_score(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
@@ -541,7 +570,7 @@ async def screen_score(
     return RedirectResponse(url=f"/screen/{decision_id}/result", status_code=303)
 
 
-@router.get("/{decision_id}/result", response_class=HTMLResponse)
+@router.get("/{decision_id}/result")
 async def screen_result(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):

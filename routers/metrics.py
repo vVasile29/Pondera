@@ -1,8 +1,9 @@
 from collections import defaultdict
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -10,10 +11,39 @@ from models import ActivityWeight, Metric
 from schemas import MetricCreate, MetricUpdate, SubMetricCreate
 
 router = APIRouter(tags=["metrics"])
-templates = Jinja2Templates(directory="templates")
 
 
-@router.get("/metrics", response_class=HTMLResponse)
+def _serialize(obj):
+    if obj is None:
+        return None
+    if hasattr(obj, "__table__"):
+        return {c.name: _serialize(getattr(obj, c.name)) for c in obj.__table__.columns}
+    if isinstance(obj, (int, float, str, bool)):
+        return obj
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    try:
+        return str(obj)
+    except Exception:
+        return None
+
+
+class JsonTemplates:
+    @staticmethod
+    def TemplateResponse(request, name, context):
+        data = {k: _serialize(v) for k, v in context.items() if k != "request"}
+        data["_template"] = name
+        return JSONResponse(content=data)
+
+
+templates = JsonTemplates()
+
+
+@router.get("/metrics")
 def list_metrics(request: Request, db: Session = Depends(get_db)):
     metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
 

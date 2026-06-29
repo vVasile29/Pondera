@@ -1,8 +1,9 @@
 """RANK (Mode 4) — Multi-alternative ranking router."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -12,7 +13,36 @@ from services.export import generate_markdown_brief, get_decision_export_data
 from services.scoring import build_significance_summary, compute_alternative_fit_scores
 
 router = APIRouter(prefix="/rank", tags=["rank"])
-templates = Jinja2Templates(directory="templates")
+
+
+def _serialize(obj):
+    if obj is None:
+        return None
+    if hasattr(obj, "__table__"):
+        return {c.name: _serialize(getattr(obj, c.name)) for c in obj.__table__.columns}
+    if isinstance(obj, (int, float, str, bool)):
+        return obj
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    try:
+        return str(obj)
+    except Exception:
+        return None
+
+
+class JsonTemplates:
+    @staticmethod
+    def TemplateResponse(request, name, context):
+        data = {k: _serialize(v) for k, v in context.items() if k != "request"}
+        data["_template"] = name
+        return JSONResponse(content=data)
+
+
+templates = JsonTemplates()
 
 
 def _significance_for_results(results, series, metrics):
@@ -48,7 +78,7 @@ def _markdown_response(decision_id: int, db: Session) -> Response:
     )
 
 
-@router.post("", response_class=HTMLResponse)
+@router.post("")
 async def rank_create(request: Request, db: Session = Depends(get_db)):
     """Entry point — parse list query, create Decision, redirect to review."""
     from services.ontology import UNIVERSAL_METRICS
@@ -110,7 +140,7 @@ async def rank_create(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(url=f"/rank/{decision.id}/review", status_code=303)
 
 
-@router.get("/{decision_id}/review", response_class=HTMLResponse)
+@router.get("/{decision_id}/review")
 def rank_review(request: Request, decision_id: int, db: Session = Depends(get_db)):
     """Review page — shows 3+ alternatives + criteria selection."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
@@ -176,7 +206,7 @@ def rank_review(request: Request, decision_id: int, db: Session = Depends(get_db
     )
 
 
-@router.post("/{decision_id}/refine", response_class=HTMLResponse)
+@router.post("/{decision_id}/refine")
 async def rank_refine(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
@@ -302,7 +332,7 @@ async def rank_refine(
     return RedirectResponse(url=f"/rank/{decision_id}/score", status_code=303)
 
 
-@router.get("/{decision_id}/score", response_class=HTMLResponse)
+@router.get("/{decision_id}/score")
 def rank_score_page(request: Request, decision_id: int, db: Session = Depends(get_db)):
     """Score page — reuses decision_score.html with context URLs."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
@@ -379,7 +409,7 @@ def rank_score_page(request: Request, decision_id: int, db: Session = Depends(ge
     )
 
 
-@router.post("/{decision_id}/score", response_class=HTMLResponse)
+@router.post("/{decision_id}/score")
 async def rank_score(request: Request, decision_id: int, db: Session = Depends(get_db)):
     """Submit scores, redirect to result."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
@@ -431,7 +461,7 @@ async def rank_score(request: Request, decision_id: int, db: Session = Depends(g
     return RedirectResponse(url=f"/rank/{decision_id}/result", status_code=303)
 
 
-@router.get("/{decision_id}/result", response_class=HTMLResponse)
+@router.get("/{decision_id}/result")
 async def rank_result(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):

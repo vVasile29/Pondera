@@ -1,8 +1,8 @@
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -15,7 +15,39 @@ from services.scoring import (
 from services.export import generate_markdown_brief, get_decision_export_data
 
 router = APIRouter(prefix="/decisions", tags=["decisions"])
-templates = Jinja2Templates(directory="templates")
+
+
+def _serialize(obj):
+    """Recursively serialize objects to JSON-safe types."""
+    if obj is None:
+        return None
+    if hasattr(obj, "__table__"):
+        return {c.name: _serialize(getattr(obj, c.name)) for c in obj.__table__.columns}
+    if isinstance(obj, (int, float, str, bool)):
+        return obj
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    try:
+        return str(obj)
+    except Exception:
+        return None
+
+
+class JsonTemplates:
+    """Minimal Jinja2Templates replacement that returns JSON instead of rendering HTML."""
+
+    @staticmethod
+    def TemplateResponse(request, name, context):
+        data = {k: _serialize(v) for k, v in context.items() if k != "request"}
+        data["_template"] = name
+        return JSONResponse(content=data)
+
+
+templates = JsonTemplates()
 
 
 def decision_result_url(decision: Decision) -> str:
@@ -65,7 +97,7 @@ def _markdown_response(decision_id: int, db: Session) -> Response:
     )
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get("")
 def list_decisions(request: Request, db: Session = Depends(get_db)):
     decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
     for decision in decisions:
@@ -77,7 +109,7 @@ def list_decisions(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/{decision_id}/refine", response_class=HTMLResponse)
+@router.post("/{decision_id}/refine")
 async def refine_decision(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
@@ -180,7 +212,7 @@ async def refine_decision(
     return RedirectResponse(url=f"/decisions/{decision_id}/score", status_code=303)
 
 
-@router.get("/{decision_id}/review", response_class=HTMLResponse)
+@router.get("/{decision_id}/review")
 def review_decision(request: Request, decision_id: int, db: Session = Depends(get_db)):
     """Review/refine page — edit alternatives and select criteria."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
@@ -245,7 +277,7 @@ def review_decision(request: Request, decision_id: int, db: Session = Depends(ge
     )
 
 
-@router.post("/{decision_id}/score", response_class=HTMLResponse)
+@router.post("/{decision_id}/score")
 async def score_decision(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
@@ -299,7 +331,7 @@ async def score_decision(
     return await decision_result(request, decision_id, db)
 
 
-@router.get("/{decision_id}/result", response_class=HTMLResponse)
+@router.get("/{decision_id}/result")
 async def decision_result(
     request: Request, decision_id: int, db: Session = Depends(get_db)
 ):
@@ -471,7 +503,7 @@ async def decision_result(
     )
 
 
-@router.get("/{decision_id}/score", response_class=HTMLResponse)
+@router.get("/{decision_id}/score")
 async def score_page(request: Request, decision_id: int, db: Session = Depends(get_db)):
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
