@@ -79,12 +79,6 @@ result page can also apply threshold filters, such as `Cost <= 60` or
 `Safety >= 80`, to separate passing and failing alternatives. Threshold filters
 operate on user-entered scores; they do not fetch external facts.
 
-### Compatibility
-
-Older stored decisions may still have `mode` values such as `diagnose`, `screen`,
-or `rank`. Those values and routes remain supported for existing decisions, but
-they are not the public product model.
-
 ---
 
 ## Architecture Principles
