@@ -266,10 +266,10 @@ def test_decision_list_mode_aware_result_links(client, db):
 
     response = client.get("/decisions")
     assert response.status_code == 200
-    assert f'/decisions/{decisions[0].id}/result' in response.text
-    assert f'/evaluate/{decisions[1].id}/result' in response.text
-    assert f'/screen/{decisions[2].id}/result' in response.text
-    assert f'/rank/{decisions[3].id}/result' in response.text
+    assert f"/decisions/{decisions[0].id}/result" in response.text
+    assert f"/evaluate/{decisions[1].id}/result" in response.text
+    assert f"/screen/{decisions[2].id}/result" in response.text
+    assert f"/rank/{decisions[3].id}/result" in response.text
     assert "badge-diagnose" not in response.text
     assert "badge-screen" not in response.text
     assert "badge-rank" not in response.text
@@ -750,7 +750,9 @@ def test_screen_backward_compat_result(client, db):
     db.add(decision)
     db.flush()
 
-    activity = Activity(name="Cheap Option", category="General", decision_id=decision.id)
+    activity = Activity(
+        name="Cheap Option", category="General", decision_id=decision.id
+    )
     db.add(activity)
     db.commit()
 
@@ -928,6 +930,7 @@ def test_rank_result_reuses_decision_result(client, db):
     assert "Ranking" in result.text
     assert "%" in result.text
 
+
 def test_decide_heuristic_routing(client, db):
     """/decide auto-detects workflow from query text."""
     resp = client.post(
@@ -1015,9 +1018,7 @@ def test_decision_apply_thresholds_valid(client, db):
     for act in activities:
         from models import AlternativeScore
 
-        ascore = AlternativeScore(
-            activity_id=act.id, metric_id=metric_id, score=80
-        )
+        ascore = AlternativeScore(activity_id=act.id, metric_id=metric_id, score=80)
         db.add(ascore)
     db.commit()
 
@@ -1144,10 +1145,7 @@ def test_decision_thresholds_no_scores(client, db):
     result = client.get(f"/decisions/{decision_id}/result")
     assert result.status_code == 200
     assert "No score available" in result.text
-    assert (
-        "Score your alternatives" in result.text
-        or "score" in result.text.lower()
-    )
+    assert "Score your alternatives" in result.text or "score" in result.text.lower()
 
 
 def test_decision_threshold_criteria_prepopulation(client, db):
@@ -1179,3 +1177,104 @@ def test_decision_threshold_criteria_prepopulation(client, db):
     # Check that the operator and value are in the page
     assert ">=" in result.text
     assert "75" in result.text
+
+
+# ── Markdown export + significance + slider polish tests ──
+
+
+def _seed_scored_decision(db, mode="choose"):
+    from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+
+    decision = Decision(query=f"Export {mode} decision", category="General", mode=mode)
+    db.add(decision)
+    db.flush()
+    activities = [
+        Activity(name="Winner", category="General", decision_id=decision.id),
+        Activity(name="Runner", category="General", decision_id=decision.id),
+    ]
+    if mode == "diagnose":
+        activities = [
+            Activity(name="Solo", category="General", decision_id=decision.id)
+        ]
+    db.add_all(activities)
+    db.flush()
+
+    metrics = db.query(Metric).order_by(Metric.id).limit(3).all()
+    assert len(metrics) >= 2
+    for activity in activities:
+        for metric in metrics:
+            db.add(
+                ActivityWeight(activity_id=activity.id, metric_id=metric.id, weight=70)
+            )
+
+    if mode == "diagnose":
+        for metric in metrics:
+            db.add(
+                AlternativeScore(
+                    activity_id=activities[0].id, metric_id=metric.id, score=80
+                )
+            )
+    else:
+        for idx, metric in enumerate(metrics):
+            db.add(
+                AlternativeScore(
+                    activity_id=activities[0].id, metric_id=metric.id, score=90 - idx
+                )
+            )
+            db.add(
+                AlternativeScore(
+                    activity_id=activities[1].id, metric_id=metric.id, score=50 + idx
+                )
+            )
+    db.commit()
+    return decision
+
+
+def test_export_markdown_endpoints_use_significance_language(client, db):
+    choose = _seed_scored_decision(db, "choose")
+    diagnose = _seed_scored_decision(db, "diagnose")
+    rank = _seed_scored_decision(db, "rank")
+    screen = _seed_scored_decision(db, "screen")
+
+    endpoints = [
+        f"/decisions/{choose.id}/export-markdown",
+        f"/evaluate/{diagnose.id}/export-markdown",
+        f"/rank/{rank.id}/export-markdown",
+        f"/screen/{screen.id}/export-markdown",
+    ]
+    for endpoint in endpoints:
+        response = client.get(endpoint)
+        forbidden = "con" + "fidence"
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/markdown")
+        assert "attachment" in response.headers["content-disposition"]
+        assert "Decision Brief" in response.text
+        assert forbidden not in response.text.lower()
+
+    assert "Statistical Significance" in client.get(endpoints[0]).text
+    assert "Statistical Significance" not in client.get(endpoints[1]).text
+
+
+def test_result_pages_use_significance_without_legacy_wording(client, db):
+    decision = _seed_scored_decision(db, "choose")
+    response = client.get(f"/decisions/{decision.id}/result")
+    assert response.status_code == 200
+    assert "Statistical Significance" in response.text
+    assert "p-value" in response.text
+    forbidden = "con" + "fidence"
+    assert forbidden not in response.text.lower()
+
+
+def test_slider_fill_markup_and_sensitivity_classes(client, db):
+    decision = _seed_scored_decision(db, "choose")
+    score_page = client.get(f"/decisions/{decision.id}/score")
+    assert score_page.status_code == 200
+    assert "x-init" in score_page.text
+    assert "--slider-fill" in score_page.text
+    assert "score-label" in score_page.text
+
+    result_page = client.get(f"/decisions/{decision.id}/result")
+    assert result_page.status_code == 200
+    assert "sensitivity-sliders" in result_page.text
+    assert "sensitivity-slider-row" in result_page.text
+    assert "sensitivity-slider-value" in result_page.text

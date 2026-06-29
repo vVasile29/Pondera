@@ -62,11 +62,10 @@
                             value="50"
                             name="score_{{ act.id }}_{{ c.id }}"
                             class="slider"
-                            x-on:input="$nextTick(() => {
-                                $el.nextElementSibling.textContent = $el.value;
-                            })"
+                            x-init="$el.style.setProperty('--slider-fill', $el.value + '%')"
+                            x-on:input="$el.style.setProperty('--slider-fill', $el.value + '%'); $el.nextElementSibling.textContent = $el.value"
                         >
-                        <span class="weight-value">50</span>
+                        <span class="score-label">50</span>
                     </div>
                 </div>
                 {% endfor %}
@@ -84,5 +83,11 @@
         </div>
     </section>
 </form>
+
+<script>
+function scoreForm() {
+    return {};
+}
+</script>
 
 {% endblock %}

@@ -1,17 +1,18 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
 from services.scoring import (
+    build_significance_summary,
     compute_alternative_fit_scores,
     filter_by_thresholds,
-    paired_t_test,
 )
+from services.export import generate_markdown_brief, get_decision_export_data
 
 router = APIRouter(prefix="/decisions", tags=["decisions"])
 templates = Jinja2Templates(directory="templates")
@@ -28,6 +29,40 @@ def decision_result_url(decision: Decision) -> str:
 
 def safe_delete_redirect(redirect: str | None) -> str:
     return redirect if redirect in {"/", "/decisions"} else "/"
+
+
+def _significance_for_results(results, series, metrics):
+    if len(results) < 2 or len(metrics) < 2:
+        return None
+    top_1 = results[0]
+    top_2 = results[1]
+    series_by_name = {s["name"]: s["scores"] for s in series}
+    scores_1 = series_by_name.get(top_1["activity_name"])
+    scores_2 = series_by_name.get(top_2["activity_name"])
+    if scores_1 is None or scores_2 is None:
+        return None
+    return build_significance_summary(
+        top_1["activity_name"],
+        top_2["activity_name"],
+        scores_1,
+        scores_2,
+        top_1["fit_score"] * 100,
+        top_2["fit_score"] * 100,
+    )
+
+
+def _markdown_response(decision_id: int, db: Session) -> Response:
+    data = get_decision_export_data(decision_id, db)
+    if not data:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    markdown = generate_markdown_brief(data)
+    return Response(
+        content=markdown,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f'attachment; filename="decision-{decision_id}-brief.md"'
+        },
+    )
 
 
 @router.get("", response_class=HTMLResponse)
@@ -362,22 +397,7 @@ async def decision_result(
         rows.append(row)
 
     # ── Statistical significance (paired t-test of top 2 alternatives) ──
-    significance = None
-    if len(results) >= 2:
-        top_1 = results[0]["activity_name"]
-        top_2 = results[1]["activity_name"]
-        # Find per-criterion scores for both
-        scores_1 = None
-        scores_2 = None
-        for s in series:
-            if s["name"] == top_1:
-                scores_1 = s["scores"]
-            elif s["name"] == top_2:
-                scores_2 = s["scores"]
-        if scores_1 is not None and scores_2 is not None and len(scores_1) >= 2:
-            significance = paired_t_test(scores_1, scores_2)
-            if "error" in significance:
-                significance = None
+    significance = _significance_for_results(results, series, metrics)
 
     # ── Threshold-based filtering (post-hoc) ──
     filter_result = None
@@ -524,6 +544,11 @@ async def score_page(request: Request, decision_id: int, db: Session = Depends(g
     )
 
 
+@router.get("/{decision_id}/export-markdown")
+def export_markdown(decision_id: int, db: Session = Depends(get_db)):
+    return _markdown_response(decision_id, db)
+
+
 @router.post("/{decision_id}/delete")
 async def delete_decision(
     request: Request, decision_id: int, db: Session = Depends(get_db)
@@ -633,9 +658,7 @@ async def apply_thresholds(
         decision.thresholds = None
     db.commit()
 
-    return RedirectResponse(
-        url=f"/decisions/{decision_id}/result", status_code=303
-    )
+    return RedirectResponse(url=f"/decisions/{decision_id}/result", status_code=303)
 
 
 @router.post("/{decision_id}/thresholds/clear")
@@ -650,9 +673,7 @@ async def clear_thresholds(
     decision.thresholds = None
     db.commit()
 
-    return RedirectResponse(
-        url=f"/decisions/{decision_id}/result", status_code=303
-    )
+    return RedirectResponse(url=f"/decisions/{decision_id}/result", status_code=303)
 
 
 async def _render_result_with_threshold_errors(
@@ -730,21 +751,7 @@ async def _render_result_with_threshold_errors(
                 row["scores"][act.id] = alt_s.score
         rows.append(row)
 
-    significance = None
-    if len(results) >= 2:
-        top_1 = results[0]["activity_name"]
-        top_2 = results[1]["activity_name"]
-        scores_1 = None
-        scores_2 = None
-        for s in series:
-            if s["name"] == top_1:
-                scores_1 = s["scores"]
-            elif s["name"] == top_2:
-                scores_2 = s["scores"]
-        if scores_1 is not None and scores_2 is not None and len(scores_1) >= 2:
-            significance = paired_t_test(scores_1, scores_2)
-            if "error" in significance:
-                significance = None
+    significance = _significance_for_results(results, series, metrics)
 
     # Build threshold_criteria from form values + stored thresholds
     filter_result = None

@@ -828,42 +828,118 @@ body:has(.landing-hero) .main {
 /* ── Sliders ── */
 .slider {
     flex: 1;
-    height: 6px;
+    height: 8px;
     -webkit-appearance: none;
     appearance: none;
-    background: var(--border);
-    border-radius: 3px;
+    background: linear-gradient(to right, var(--primary) 0%, var(--primary) var(--slider-fill, 50%), var(--border) var(--slider-fill, 50%), var(--border) 100%);
+    border-radius: 9999px;
     outline: none;
     cursor: pointer;
+    transition: filter 0.15s, box-shadow 0.15s;
+}
+
+.slider:hover {
+    filter: brightness(1.03);
+}
+
+.slider:focus-visible {
+    box-shadow: 0 0 0 4px var(--ring);
 }
 
 .slider::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
     background: var(--primary);
     cursor: pointer;
-    border: 2px solid white;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    border: 3px solid var(--bg-card);
+    box-shadow: var(--shadow-md);
+    transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.slider:hover::-webkit-slider-thumb {
+    transform: scale(1.08);
+}
+
+.slider:active::-webkit-slider-thumb {
+    transform: scale(0.96);
 }
 
 .slider::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
     background: var(--primary);
     cursor: pointer;
-    border: 2px solid white;
+    border: 3px solid var(--bg-card);
+    box-shadow: var(--shadow-md);
 }
 
-.weight-value {
+.weight-value,
+.score-label {
     font-weight: 700;
     font-size: 0.9375rem;
     min-width: 2.5rem;
     text-align: right;
     color: var(--primary);
+}
+
+.score-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 3rem;
+    padding: 0.25rem 0.625rem;
+    background: var(--secondary);
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+}
+
+.sensitivity-sliders {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.sensitivity-slider-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) minmax(180px, 2fr) auto;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-card);
+}
+
+.sensitivity-slider-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.sensitivity-slider-value {
+    min-width: 3rem;
+    padding: 0.25rem 0.625rem;
+    color: var(--primary);
+    background: var(--secondary);
+    border-radius: 9999px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.p-value.p-high,
+.p-value.p-significant,
+.significance-positive {
+    color: var(--success);
+}
+
+.p-value.p-marginal {
+    color: var(--warning);
+}
+
+.p-value.p-none {
+    color: var(--text-muted);
 }
 
 /* ── Sub-metrics ── */
@@ -1332,6 +1408,10 @@ textarea.form-input {
 
     .metric-weight {
         width: 100%;
+    }
+
+    .sensitivity-slider-row {
+        grid-template-columns: 1fr;
     }
 
     .card-grid {

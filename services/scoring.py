@@ -77,7 +77,8 @@ def filter_by_thresholds(decision_id: int, db: Session) -> dict:
             if threshold_value < 0.0 or threshold_value > 100.0:
                 logging.warning(
                     "filter_by_thresholds: threshold value %s out of range for metric %s — clamped to 0-100",
-                    threshold_value, metric_id
+                    threshold_value,
+                    metric_id,
                 )
                 threshold_value = max(0.0, min(100.0, threshold_value))
 
@@ -288,6 +289,134 @@ def paired_t_test(scores_a: list[float], scores_b: list[float]) -> dict:
     }
 
 
+def significance_label(p_value: float) -> str:
+    if p_value < 0.01:
+        return "highly significant"
+    if p_value < 0.05:
+        return "significant"
+    if p_value < 0.10:
+        return "marginally significant"
+    return "not significant"
+
+
+def build_significance_summary(
+    winner_name: str,
+    runner_name: str,
+    winner_scores: list[float],
+    runner_scores: list[float],
+    winner_avg: float,
+    runner_avg: float,
+) -> dict | None:
+    test = paired_t_test(winner_scores, runner_scores)
+    if "error" in test:
+        return None
+
+    p_value = test["p_value"]
+    return {
+        "t_statistic": test["t_statistic"],
+        "df": test["degrees_of_freedom"],
+        "p_value": p_value,
+        "label": significance_label(p_value),
+        "winner_avg": round(winner_avg, 1),
+        "runner_avg": round(runner_avg, 1),
+        "winner_name": winner_name,
+        "runner_name": runner_name,
+        "mean_diff": test.get("mean_difference"),
+        "std_diff": test.get("std_difference"),
+        "num_criteria": test.get("num_criteria"),
+        "significant": test.get("significant", False),
+    }
+
+
+def apply_ko_criteria(decision_id: int, db: Session) -> dict:
+    from models import Activity, AlternativeScore, Decision, Metric
+
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    if not decision or not hasattr(decision, "ko_criteria"):
+        return {
+            "eliminated": [],
+            "survivor_ids": [a.id for a in activities],
+            "all_eliminated": False,
+        }
+
+    criteria_raw = getattr(decision, "ko_criteria", None)
+    if not criteria_raw:
+        return {
+            "eliminated": [],
+            "survivor_ids": [a.id for a in activities],
+            "all_eliminated": False,
+        }
+
+    try:
+        criteria = json.loads(criteria_raw)
+    except (json.JSONDecodeError, TypeError):
+        criteria = []
+
+    if not criteria:
+        return {
+            "eliminated": [],
+            "survivor_ids": [a.id for a in activities],
+            "all_eliminated": False,
+        }
+
+    metrics = {m.id: m for m in db.query(Metric).all()}
+    eliminated = []
+    survivor_ids = []
+
+    for activity in activities:
+        scores = {
+            s.metric_id: s.score
+            for s in db.query(AlternativeScore)
+            .filter(AlternativeScore.activity_id == activity.id)
+            .all()
+        }
+        reasons = []
+        for criterion in criteria:
+            metric_id = criterion.get("metric_id")
+            operator = criterion.get("operator", ">=")
+            value = float(criterion.get("value", 0))
+            metric_name = (
+                metrics.get(metric_id).name
+                if metric_id in metrics
+                else "Unknown metric"
+            )
+            score = scores.get(metric_id)
+            failed = score is None
+            if score is not None:
+                failed = (
+                    (operator == ">=" and score < value)
+                    or (operator == ">" and score <= value)
+                    or (operator == "<=" and score > value)
+                    or (operator == "<" and score >= value)
+                )
+            if failed:
+                if score is None:
+                    reasons.append(
+                        f"No score available for {metric_name} (KO {operator} {value})"
+                    )
+                else:
+                    reasons.append(
+                        f"{metric_name} ({score}) fails KO {operator} {value}"
+                    )
+        if reasons:
+            eliminated.append(
+                {
+                    "activity_id": activity.id,
+                    "activity_name": activity.name,
+                    "ko_reasons": reasons,
+                }
+            )
+        else:
+            survivor_ids.append(activity.id)
+
+    return {
+        "eliminated": eliminated,
+        "survivor_ids": survivor_ids,
+        "all_eliminated": bool(activities) and not survivor_ids,
+    }
+
+
 def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
     """Compute fit scores for alternative scoring (decision engine flow).
 
@@ -297,7 +426,7 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
 
     Returns sorted list of {activity_id, activity_name, fit_score, weighted_score}.
     """
-    from models import Activity, AlternativeScore
+    from models import Activity, AlternativeScore, Metric
 
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
     if not activities:
@@ -317,6 +446,11 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
         if not weights:
             continue
 
+        # Build higher_is_better map for metrics in this activity's weights
+        metric_ids = list(weights.keys())
+        metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
+        higher_is_better_map = {m.id: m.higher_is_better for m in metrics}
+
         # Get scores for this activity
         scores: dict[int, float] = {}
         for ascore in (
@@ -332,7 +466,10 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
 
         for metric_id, weight in weights.items():
             score = scores.get(metric_id, 0.0)
-            numerator += score * weight
+            effective_score = (
+                score if higher_is_better_map.get(metric_id, True) else (100.0 - score)
+            )
+            numerator += effective_score * weight
             denominator += weight
             weighted_scores.append(
                 {
@@ -386,10 +523,11 @@ def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
     if not weights:
         return []
 
-    # Get metric-to-dimension mapping
+    # Get metric-to-dimension mapping and higher_is_better map
     metric_ids = list(weights.keys())
     metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
     metric_category: dict[int, str] = {m.id: m.category for m in metrics}
+    higher_is_better_map: dict[int, bool] = {m.id: m.higher_is_better for m in metrics}
 
     # Get scores for each activity (we'll average across activities for diagnose mode
     # where there's typically just one activity)
@@ -417,10 +555,15 @@ def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
             if s is not None:
                 scores_list.append(s)
         avg_score = sum(scores_list) / len(scores_list) if scores_list else 0.0
+        effective_avg_score = (
+            avg_score
+            if higher_is_better_map.get(metric_id, True)
+            else (100.0 - avg_score)
+        )
         dim_groups[cat].append(
             {
                 "metric_id": metric_id,
-                "score": avg_score,
+                "score": effective_avg_score,
                 "weight": weights[metric_id],
             }
         )

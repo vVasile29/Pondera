@@ -1,17 +1,51 @@
 """RANK (Mode 4) — Multi-alternative ranking router."""
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
 from services.parser import extract_list
-from services.scoring import compute_alternative_fit_scores, paired_t_test
+from services.export import generate_markdown_brief, get_decision_export_data
+from services.scoring import build_significance_summary, compute_alternative_fit_scores
 
 router = APIRouter(prefix="/rank", tags=["rank"])
 templates = Jinja2Templates(directory="templates")
+
+
+def _significance_for_results(results, series, metrics):
+    if len(results) < 2 or len(metrics) < 2:
+        return None
+    top_1 = results[0]
+    top_2 = results[1]
+    series_by_name = {s["name"]: s["scores"] for s in series}
+    scores_1 = series_by_name.get(top_1["activity_name"])
+    scores_2 = series_by_name.get(top_2["activity_name"])
+    if scores_1 is None or scores_2 is None:
+        return None
+    return build_significance_summary(
+        top_1["activity_name"],
+        top_2["activity_name"],
+        scores_1,
+        scores_2,
+        top_1["fit_score"] * 100,
+        top_2["fit_score"] * 100,
+    )
+
+
+def _markdown_response(decision_id: int, db: Session) -> Response:
+    data = get_decision_export_data(decision_id, db)
+    if not data:
+        raise HTTPException(status_code=404, detail="Ranking not found")
+    return Response(
+        content=generate_markdown_brief(data),
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f'attachment; filename="decision-{decision_id}-brief.md"'
+        },
+    )
 
 
 @router.post("", response_class=HTMLResponse)
@@ -498,21 +532,7 @@ async def rank_result(
         rows.append(row)
 
     # Statistical significance
-    significance = None
-    if len(results) >= 2:
-        top_1 = results[0]["activity_name"]
-        top_2 = results[1]["activity_name"]
-        scores_1 = None
-        scores_2 = None
-        for s in series:
-            if s["name"] == top_1:
-                scores_1 = s["scores"]
-            elif s["name"] == top_2:
-                scores_2 = s["scores"]
-        if scores_1 is not None and scores_2 is not None and len(scores_1) >= 2:
-            significance = paired_t_test(scores_1, scores_2)
-            if "error" in significance:
-                significance = None
+    significance = _significance_for_results(results, series, metrics)
 
     return templates.TemplateResponse(
         request,
@@ -531,6 +551,11 @@ async def rank_result(
             "active_page": "decisions",
         },
     )
+
+
+@router.get("/{decision_id}/export-markdown")
+def export_markdown(decision_id: int, db: Session = Depends(get_db)):
+    return _markdown_response(decision_id, db)
 
 
 @router.post("/{decision_id}/delete")

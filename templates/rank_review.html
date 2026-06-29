@@ -108,6 +108,8 @@
                                     :name="'criterion_weight_' + index"
                                     x-model="crit.default_weight"
                                     class="slider"
+                                    x-init="$el.style.setProperty('--slider-fill', crit.default_weight + '%')"
+                                    @input="$el.style.setProperty('--slider-fill', $el.value + '%')"
                                 >
                             </div>
                             <div class="checkbox-group" style="min-width: 100px;">

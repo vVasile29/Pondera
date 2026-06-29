@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
+from services.export import generate_markdown_brief, get_decision_export_data
 from services.parser import extract_subject
 from services.scoring import (
     compute_alternative_fit_scores,
@@ -14,6 +15,19 @@ from services.scoring import (
 
 router = APIRouter(prefix="/evaluate", tags=["evaluate"])
 templates = Jinja2Templates(directory="templates")
+
+
+def _markdown_response(decision_id: int, db: Session) -> Response:
+    data = get_decision_export_data(decision_id, db)
+    if not data:
+        raise HTTPException(status_code=404, detail="Evaluation not found")
+    return Response(
+        content=generate_markdown_brief(data),
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f'attachment; filename="decision-{decision_id}-brief.md"'
+        },
+    )
 
 
 @router.post("", response_class=HTMLResponse)
@@ -405,6 +419,7 @@ async def evaluate_result(
                 "series": [],
                 "dimension_scores": [],
                 "gap_analysis_result": None,
+                "significance": None,
                 "active_page": "decisions",
             },
         )
@@ -488,9 +503,15 @@ async def evaluate_result(
             "results": results,
             "dimension_scores": dim_scores,
             "gap_analysis_result": gap_result,
+            "significance": None,
             "active_page": "decisions",
         },
     )
+
+
+@router.get("/{decision_id}/export-markdown")
+def export_markdown(decision_id: int, db: Session = Depends(get_db)):
+    return _markdown_response(decision_id, db)
 
 
 @router.post("/{decision_id}/delete")

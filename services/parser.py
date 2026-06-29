@@ -308,32 +308,38 @@ def extract_thresholds_detailed(query: str) -> dict:
         if metric_name:
             if val < 0.0 or val > 100.0:
                 reason = "value < 0" if val < 0 else "value > 100"
-                out_of_range.append({
-                    "metric_name": metric_name,
-                    "operator": op,
-                    "value": val,
-                    "reason": reason,
-                })
+                out_of_range.append(
+                    {
+                        "metric_name": metric_name,
+                        "operator": op,
+                        "value": val,
+                        "reason": reason,
+                    }
+                )
             else:
                 key = (metric_name, op, val)
                 if key not in seen:
                     seen.add(key)
-                    valid.append({
-                        "metric_name": metric_name,
-                        "operator": op,
-                        "value": val,
-                    })
+                    valid.append(
+                        {
+                            "metric_name": metric_name,
+                            "operator": op,
+                            "value": val,
+                        }
+                    )
         else:
             raw_text = f"{raw_metric} {op} {val_str}"
             unk_key = raw_text.lower()
             if unk_key not in seen_unknown:
                 seen_unknown.add(unk_key)
-                unknown.append({
-                    "raw_text": raw_text,
-                    "metric_name": raw_metric,
-                    "operator": op,
-                    "value_str": val_str,
-                })
+                unknown.append(
+                    {
+                        "raw_text": raw_text,
+                        "metric_name": raw_metric,
+                        "operator": op,
+                        "value_str": val_str,
+                    }
+                )
 
     # Pattern 2: keyword value metric (e.g., "at least 80% quality")
     for match in re.finditer(patterns[1], query, re.IGNORECASE):
@@ -346,33 +352,39 @@ def extract_thresholds_detailed(query: str) -> dict:
             op = ">=" if keyword in ("least", "minimum", "min") else "<="
             if val < 0.0 or val > 100.0:
                 reason = "value < 0" if val < 0 else "value > 100"
-                out_of_range.append({
-                    "metric_name": metric_name,
-                    "operator": op,
-                    "value": val,
-                    "reason": reason,
-                })
+                out_of_range.append(
+                    {
+                        "metric_name": metric_name,
+                        "operator": op,
+                        "value": val,
+                        "reason": reason,
+                    }
+                )
             else:
                 key = (metric_name, op, val)
                 if key not in seen:
                     seen.add(key)
-                    valid.append({
-                        "metric_name": metric_name,
-                        "operator": op,
-                        "value": val,
-                    })
+                    valid.append(
+                        {
+                            "metric_name": metric_name,
+                            "operator": op,
+                            "value": val,
+                        }
+                    )
         else:
             op = ">=" if keyword in ("least", "minimum", "min") else "<="
             raw_text = f"{keyword} {val_str} {raw_metric}"
             unk_key = raw_text.lower()
             if unk_key not in seen_unknown:
                 seen_unknown.add(unk_key)
-                unknown.append({
-                    "raw_text": raw_text,
-                    "metric_name": raw_metric,
-                    "operator": op,
-                    "value_str": val_str,
-                })
+                unknown.append(
+                    {
+                        "raw_text": raw_text,
+                        "metric_name": raw_metric,
+                        "operator": op,
+                        "value_str": val_str,
+                    }
+                )
 
     # Pattern 3: keyword metric value (e.g., "maximum cost 50%")
     for match in re.finditer(patterns[2], query, re.IGNORECASE):
@@ -385,33 +397,39 @@ def extract_thresholds_detailed(query: str) -> dict:
             op = ">=" if keyword in ("least", "minimum", "min") else "<="
             if val < 0.0 or val > 100.0:
                 reason = "value < 0" if val < 0 else "value > 100"
-                out_of_range.append({
-                    "metric_name": metric_name,
-                    "operator": op,
-                    "value": val,
-                    "reason": reason,
-                })
+                out_of_range.append(
+                    {
+                        "metric_name": metric_name,
+                        "operator": op,
+                        "value": val,
+                        "reason": reason,
+                    }
+                )
             else:
                 key = (metric_name, op, val)
                 if key not in seen:
                     seen.add(key)
-                    valid.append({
-                        "metric_name": metric_name,
-                        "operator": op,
-                        "value": val,
-                    })
+                    valid.append(
+                        {
+                            "metric_name": metric_name,
+                            "operator": op,
+                            "value": val,
+                        }
+                    )
         else:
             op = ">=" if keyword in ("least", "minimum", "min") else "<="
             raw_text = f"{keyword} {raw_metric} {val_str}"
             unk_key = raw_text.lower()
             if unk_key not in seen_unknown:
                 seen_unknown.add(unk_key)
-                unknown.append({
-                    "raw_text": raw_text,
-                    "metric_name": raw_metric,
-                    "operator": op,
-                    "value_str": val_str,
-                })
+                unknown.append(
+                    {
+                        "raw_text": raw_text,
+                        "metric_name": raw_metric,
+                        "operator": op,
+                        "value_str": val_str,
+                    }
+                )
 
     return {
         "valid": valid,

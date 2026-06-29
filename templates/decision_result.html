@@ -2,11 +2,13 @@
 {% block content %}
 
 <div class="detail-header">
+    {% set export_url = '/rank/' ~ decision.id ~ '/export-markdown' if decision.mode == 'rank' else '/decisions/' ~ decision.id ~ '/export-markdown' %}
     <div>
         <h1>Results</h1>
         <p class="text-muted">{{ decision.query }}</p>
     </div>
     <div class="detail-actions">
+        <a href="{{ export_url }}" class="btn btn-secondary">Export Markdown</a>
         <a href="/decisions/{{ decision.id }}/score" class="btn btn-secondary">Re-score</a>
         <a href="/" class="btn btn-primary">New Decision</a>
         <form action="/decisions/{{ decision.id }}/delete" method="POST" style="display: inline;" onsubmit="return confirm('Delete this decision and all its data?')">
@@ -141,11 +143,13 @@
     <div class="section-header">
         <h2>Statistical Significance</h2>
     </div>
-    <div class="insight-callout" style="{% if significance.significant %}border-left: 4px solid var(--green);{% else %}border-left: 4px solid var(--text-muted);{% endif %}">
+    <div class="insight-callout significance-card {% if significance.significant %}significance-positive{% endif %}">
         <p style="margin-bottom: 0.5rem;">
-            <strong>Paired t-test</strong> comparing the top 2 alternatives across
+            <strong>Paired t-test: {{ significance.label }}</strong> comparing
+            {{ significance.winner_name }} ({{ significance.winner_avg }}%) with
+            {{ significance.runner_name }} ({{ significance.runner_avg }}%) across
             {{ significance.num_criteria }} criteria
-            ({{ significance.degrees_of_freedom }} degrees of freedom):
+            ({{ significance.df }} degrees of freedom):
         </p>
         <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; align-items: baseline; margin-top: 0.5rem;">
             <div>
@@ -154,16 +158,16 @@
             </div>
             <div>
                 <span class="text-muted">p-value:</span>
-                <strong>{{ significance.p_value }}</strong>
+                <strong class="p-value {% if significance.p_value < 0.01 %}p-high{% elif significance.p_value < 0.05 %}p-significant{% elif significance.p_value < 0.10 %}p-marginal{% else %}p-none{% endif %}">{{ significance.p_value }}</strong>
             </div>
             <div>
                 <span class="text-muted">Mean difference:</span>
-                <strong>{{ significance.mean_difference }}</strong>
+                <strong>{{ significance.mean_diff }}</strong>
             </div>
         </div>
         {% if significance.significant %}
         <div style="margin-top: 0.75rem; padding: 0.5rem 0.75rem; background: rgba(34, 197, 94, 0.1); border-radius: var(--radius-sm); display: inline-block;">
-            <span style="color: var(--green); font-weight: 600;">✓ Statistically significant</span>
+            <span style="color: var(--success); font-weight: 600;">✓ Statistically significant</span>
             <span class="text-muted" style="font-size: 0.8rem;"> (p &lt; 0.05) — the observed difference is unlikely due to chance</span>
         </div>
         {% else %}
@@ -172,6 +176,26 @@
             <span class="text-muted" style="font-size: 0.8rem;"> (p &ge; 0.05) — the difference could be due to random variation</span>
         </div>
         {% endif %}
+    </div>
+</section>
+{% endif %}
+
+{% if results|length >= 2 %}
+<section class="section sensitivity-analysis" x-data="{ open: false }">
+    <div class="section-header">
+        <h2>Sensitivity Analysis</h2>
+        <button type="button" class="btn btn-secondary btn-sm" @click="open = !open" x-text="open ? 'Hide' : 'Show'"></button>
+    </div>
+    <div class="sensitivity-sliders" x-show="open" x-transition>
+        {% for row in rows %}
+        <div class="sensitivity-slider-row">
+            <label class="sensitivity-slider-label">{{ row.metric_name }}</label>
+            <input type="range" min="0" max="100" value="{{ row.weight }}" class="slider sensitivity-slider"
+                   x-init="$el.style.setProperty('--slider-fill', $el.value + '%')"
+                   @input="$el.style.setProperty('--slider-fill', $el.value + '%'); $el.nextElementSibling.textContent = $el.value">
+            <span class="sensitivity-slider-value">{{ row.weight }}</span>
+        </div>
+        {% endfor %}
     </div>
 </section>
 {% endif %}

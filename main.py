@@ -175,9 +175,7 @@ async def decide(request: Request, db: Session = Depends(get_db)):
                 _seed_default_weights(activity.id)
 
             db.commit()
-            return RedirectResponse(
-                url=f"/rank/{decision.id}/review", status_code=303
-            )
+            return RedirectResponse(url=f"/rank/{decision.id}/review", status_code=303)
 
     # Continue as CHOOSE
     decision = Decision(query=query, category=category)
