@@ -231,7 +231,7 @@ export default function EvaluateResult() {
             <h1 className="text-3xl font-bold">Evaluation Result</h1>
             <p className="text-muted-foreground mt-1">{data.decision.query}</p>
           </div>
-          <ExportButton decisionId={decisionId} mode="diagnose" />
+          <ExportButton decisionId={decisionId} />
         </div>
         <Card>
           <CardContent className="py-12 text-center space-y-4">
@@ -258,7 +258,7 @@ export default function EvaluateResult() {
           <h1 className="text-3xl font-bold">Evaluation Result</h1>
           <p className="text-muted-foreground mt-1">{data.decision.query}</p>
         </div>
-        <ExportButton decisionId={decisionId} mode="diagnose" />
+        <ExportButton decisionId={decisionId} />
       </div>
 
       {/* ── Overall Score ── */}

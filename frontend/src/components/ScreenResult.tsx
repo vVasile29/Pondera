@@ -93,8 +93,6 @@ export default function ScreenResult() {
     fetchScreen();
   }, [fetchScreen]);
 
-  const mode = data?.decision?.mode ?? "screen";
-
   // Client-side recomputed results (for sensitivity analysis)
   const displayResults = useMemo<FitResult[]>(() => {
     if (!data?.results || data.results.length === 0) return [];
@@ -168,7 +166,7 @@ export default function ScreenResult() {
             <h1 className="text-3xl font-bold">Screen Results</h1>
             <p className="text-muted-foreground mt-1">{data.decision.query}</p>
           </div>
-          <ExportButton decisionId={decisionId} mode={mode} />
+          <ExportButton decisionId={decisionId} />
         </div>
         <Card>
           <CardContent className="py-12 text-center space-y-4">
@@ -203,7 +201,7 @@ export default function ScreenResult() {
           >
             Re-score
           </Button>
-          <ExportButton decisionId={decisionId} mode="screen" />
+          <ExportButton decisionId={decisionId} />
         </div>
       </div>
 

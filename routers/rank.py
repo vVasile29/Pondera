@@ -3,13 +3,12 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
 from services.parser import extract_list
-from services.export import generate_markdown_brief, get_decision_export_data
 from services.scoring import build_significance_summary, compute_alternative_fit_scores
 
 router = APIRouter(prefix="/rank", tags=["rank"])
@@ -62,19 +61,6 @@ def _significance_for_results(results, series, metrics):
         scores_2,
         top_1["fit_score"] * 100,
         top_2["fit_score"] * 100,
-    )
-
-
-def _markdown_response(decision_id: int, db: Session) -> Response:
-    data = get_decision_export_data(decision_id, db)
-    if not data:
-        raise HTTPException(status_code=404, detail="Ranking not found")
-    return Response(
-        content=generate_markdown_brief(data),
-        media_type="text/markdown",
-        headers={
-            "Content-Disposition": f'attachment; filename="decision-{decision_id}-brief.md"'
-        },
     )
 
 
@@ -581,11 +567,6 @@ async def rank_result(
             "active_page": "decisions",
         },
     )
-
-
-@router.get("/{decision_id}/export-markdown")
-def export_markdown(decision_id: int, db: Session = Depends(get_db)):
-    return _markdown_response(decision_id, db)
 
 
 @router.post("/{decision_id}/delete")

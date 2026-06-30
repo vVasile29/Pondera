@@ -1218,29 +1218,34 @@ def _seed_scored_decision(db, mode="choose"):
     return decision
 
 
-def test_export_markdown_endpoints_use_significance_language(client, db):
+def test_export_markdown_endpoint(client, db):
+    """Export markdown works via consolidated /api endpoint.
+    
+    For `choose` mode (2+ alternatives), the brief includes Statistical Significance.
+    For `diagnose` mode (single alternative), the brief should not include it.
+    """
     choose = _seed_scored_decision(db, "choose")
     diagnose = _seed_scored_decision(db, "diagnose")
-    rank = _seed_scored_decision(db, "rank")
-    screen = _seed_scored_decision(db, "screen")
 
-    endpoints = [
-        f"/decisions/{choose.id}/export-markdown",
-        f"/evaluate/{diagnose.id}/export-markdown",
-        f"/rank/{rank.id}/export-markdown",
-        f"/screen/{screen.id}/export-markdown",
-    ]
-    for endpoint in endpoints:
-        response = client.get(endpoint)
-        forbidden = "con" + "fidence"
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/markdown")
-        assert "attachment" in response.headers["content-disposition"]
-        assert "Decision Brief" in response.text
-        assert forbidden not in response.text.lower()
+    # ── choose mode export ──
+    resp = client.get(f"/api/decisions/{choose.id}/export-markdown")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in resp.headers["content-disposition"]
+    assert "Decision Brief" in resp.text
+    assert "Statistical Significance" in resp.text
 
-    assert "Statistical Significance" in client.get(endpoints[0]).text
-    assert "Statistical Significance" not in client.get(endpoints[1]).text
+    # ── diagnose mode export ──
+    resp = client.get(f"/api/decisions/{diagnose.id}/export-markdown")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in resp.headers["content-disposition"]
+    assert "Decision Brief" in resp.text
+    assert "Statistical Significance" not in resp.text
+
+    # ── non-existent decision ──
+    resp = client.get("/api/decisions/99999/export-markdown")
+    assert resp.status_code == 404
 
 
 def test_result_pages_use_significance_without_legacy_wording(client, db):

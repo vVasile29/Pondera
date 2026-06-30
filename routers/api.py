@@ -7,11 +7,13 @@ Allows headless access for frontend frameworks (e.g., Vue, React via localhost:5
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, ActivityWeight, AlternativeScore, Decision, Metric
 from schemas import MetricCreate, MetricUpdate
+from services.export import generate_markdown_brief, get_decision_export_data
 from services.scoring import (
     build_significance_summary,
     compute_alternative_fit_scores,
@@ -678,6 +680,22 @@ def get_rank(decision_id: int, db: Session = Depends(get_db)):
 def get_screen(decision_id: int, db: Session = Depends(get_db)):
     """Same as GET /api/decisions/{id} but always computes filter_result."""
     return _build_decision_detail(decision_id, db, force_filter=True)
+
+
+@router.get("/decisions/{decision_id}/export-markdown")
+def export_decision_markdown(decision_id: int, db: Session = Depends(get_db)):
+    """Export a decision brief as a downloadable Markdown file."""
+    data = get_decision_export_data(decision_id, db)
+    if not data:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    markdown = generate_markdown_brief(data)
+    return Response(
+        content=markdown,
+        media_type="text/markdown",
+        headers={
+            "Content-Disposition": f'attachment; filename="decision-{decision_id}-brief.md"'
+        },
+    )
 
 
 @router.get("/metrics")

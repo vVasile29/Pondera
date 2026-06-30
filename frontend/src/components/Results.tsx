@@ -68,7 +68,6 @@ export default function Results() {
   );
 
   const decisionId = id ? parseInt(id) : 0;
-  const mode = data?.decision?.mode ?? "choose";
   const isSingle = (data?.activities?.length ?? 0) <= 1;
 
   // Sensitivity weights
@@ -140,7 +139,7 @@ export default function Results() {
             <h1 className="text-3xl font-bold">Results</h1>
             <p className="text-muted-foreground mt-1">{data.decision.query}</p>
           </div>
-          <ExportButton decisionId={decisionId} mode={mode} />
+          <ExportButton decisionId={decisionId} />
         </div>
         <Card>
           <CardContent className="py-12 text-center space-y-4">
@@ -174,7 +173,7 @@ export default function Results() {
           >
             Re-score
           </Button>
-          <ExportButton decisionId={decisionId} mode={mode} />
+          <ExportButton decisionId={decisionId} />
         </div>
       </div>
 
