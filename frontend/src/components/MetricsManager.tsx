@@ -15,7 +15,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus, Pencil, Trash2, Loader2, RefreshCw } from "lucide-react";
-import type { GroupedMetric, MetricsResponse, MetricCreatePayload, MetricUpdatePayload } from "@/types";
+import type {
+  GroupedMetric,
+  MetricsResponse,
+  MetricCreatePayload,
+  MetricUpdatePayload,
+} from "@/types";
 
 const CATEGORIES = [
   "Financial",
@@ -137,7 +142,12 @@ export default function MetricsManager() {
   };
 
   const handleDelete = async (m: GroupedMetric) => {
-    if (!window.confirm(`Delete "${m.name}"? This will remove all associated scores and weights.`)) return;
+    if (
+      !window.confirm(
+        `Delete "${m.name}"? This will remove all associated scores and weights.`,
+      )
+    )
+      return;
     try {
       await api.deleteMetric(m.id);
       await fetchMetrics();
@@ -184,7 +194,10 @@ export default function MetricsManager() {
             {sortedDimensions.length !== 1 ? "s" : ""}
           </p>
         </div>
-        <Button onClick={() => setShowCreateForm(true)} disabled={showCreateForm}>
+        <Button
+          onClick={() => setShowCreateForm(true)}
+          disabled={showCreateForm}
+        >
           <Plus className="h-4 w-4 mr-2" /> Add Metric
         </Button>
       </div>
@@ -239,7 +252,10 @@ export default function MetricsManager() {
                   placeholder="Brief description of the metric"
                   value={createForm.description}
                   onChange={(e) =>
-                    setCreateForm({ ...createForm, description: e.target.value })
+                    setCreateForm({
+                      ...createForm,
+                      description: e.target.value,
+                    })
                   }
                 />
               </div>
@@ -294,7 +310,10 @@ export default function MetricsManager() {
                             <Input
                               value={editForm.name}
                               onChange={(e) =>
-                                setEditForm({ ...editForm, name: e.target.value })
+                                setEditForm({
+                                  ...editForm,
+                                  name: e.target.value,
+                                })
                               }
                             />
                           </div>
@@ -350,7 +369,11 @@ export default function MetricsManager() {
                           <Button size="sm" onClick={() => handleUpdate(m.id)}>
                             Save
                           </Button>
-                          <Button size="sm" variant="outline" onClick={cancelEditing}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={cancelEditing}
+                          >
                             Cancel
                           </Button>
                         </div>
@@ -361,14 +384,18 @@ export default function MetricsManager() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium">{m.name}</span>
                             <Badge
-                              variant={m.higher_is_better ? "default" : "secondary"}
+                              variant={
+                                m.higher_is_better ? "default" : "secondary"
+                              }
                               className={
                                 m.higher_is_better
                                   ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"
                                   : "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100"
                               }
                             >
-                              {m.higher_is_better ? "\u2191 Higher better" : "\u2193 Lower better"}
+                              {m.higher_is_better
+                                ? "\u2191 Higher better"
+                                : "\u2193 Lower better"}
                             </Badge>
                           </div>
                           {m.description && (
@@ -379,7 +406,11 @@ export default function MetricsManager() {
                           {m.children && m.children.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-2">
                               {m.children.map((child) => (
-                                <Badge key={child.id} variant="outline" className="text-xs">
+                                <Badge
+                                  key={child.id}
+                                  variant="outline"
+                                  className="text-xs"
+                                >
                                   {child.name}
                                 </Badge>
                               ))}

@@ -2,25 +2,14 @@ import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useDecision } from "@/hooks/useDecision";
 import { api } from "@/lib/api";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Loader2,
-  ArrowRight,
-  ArrowUp,
-  ArrowDown,
-  Info,
-} from "lucide-react";
+import { Loader2, ArrowRight, ArrowUp, ArrowDown, Info } from "lucide-react";
 import type { Metric } from "@/types";
 
 const DIMENSION_ORDER = [
@@ -151,9 +140,7 @@ export default function EvaluateReview() {
 
       navigate(`/evaluate/${numId}/result`);
     } catch (e: any) {
-      setSubmitError(
-        e.message || "Failed to save changes. Please try again.",
-      );
+      setSubmitError(e.message || "Failed to save changes. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -279,9 +266,7 @@ export default function EvaluateReview() {
                     <div className="flex items-center gap-2 flex-1 min-w-0">
                       <Slider
                         value={[metricWeights[metric.id] ?? 50]}
-                        onValueChange={(v) =>
-                          handleWeightChange(metric.id, v)
-                        }
+                        onValueChange={(v) => handleWeightChange(metric.id, v)}
                         min={0}
                         max={100}
                         step={1}

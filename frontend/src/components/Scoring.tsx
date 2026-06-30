@@ -2,12 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useDecision } from "@/hooks/useDecision";
 import { useScoring } from "@/hooks/useScoring";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -175,8 +170,7 @@ export default function Scoring() {
 
               {/* Per-alternative slider cells */}
               {activities.map((act) => {
-                const val =
-                  scores[`${act.id}_${metric.id}`] ?? 0;
+                const val = scores[`${act.id}_${metric.id}`] ?? 0;
                 return (
                   <div key={`${act.id}_${metric.id}`} className="p-3">
                     <div className="flex items-center gap-3">
@@ -238,7 +232,10 @@ export default function Scoring() {
                         >
                           {val}
                         </span>
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 h-5"
+                        >
                           {scoreLabel(val)}
                         </Badge>
                       </div>

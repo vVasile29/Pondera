@@ -1,8 +1,8 @@
-# Pondera - Product Vision
+# Optium - Product Vision
 
 ## What We Are Building
 
-Pondera is a universal multi-criteria decision analysis (MCDA) engine with one
+Optium is a universal multi-criteria decision analysis (MCDA) engine with one
 simple entry point: type a decision question, review the parsed structure, score
 the options, and inspect the result.
 
@@ -11,7 +11,7 @@ people a transparent framework for thinking through decisions using explicit
 criteria, weights, scores, and tradeoffs.
 
 The current product direction is **one unified prompt entry**, not a public set
-of modes. Internally, Pondera infers the decision shape from the prompt:
+of modes. Internally, Optium infers the decision shape from the prompt:
 
 | Prompt shape | Internal flow | Example |
 |--------------|---------------|---------|
@@ -34,7 +34,7 @@ and ranked survivors.
 | Roy's decision problem typology | Internal interpretation of choice, ranking, and description/diagnosis shapes |
 | Elimination by Aspects | Threshold-style filtering after scores exist |
 
-These sources guide the product, but Pondera should be described as grounded in
+These sources guide the product, but Optium should be described as grounded in
 or inspired by MCDA principles, not as academically certified advice.
 
 ### The Universal Criteria Framework
@@ -64,7 +64,7 @@ the appropriate internal flow.
 ### Review Before Scoring
 
 The user sees what the system parsed before scoring. They can edit alternatives,
-select metrics, and adjust weights. This is where Pondera stays transparent: the
+select metrics, and adjust weights. This is where Optium stays transparent: the
 model is inspectable before it produces an answer.
 
 ### Score on a 0-100 Scale
@@ -160,7 +160,7 @@ not as a growing set of public modes.
 
 | Not in scope | Reason |
 |--------------|--------|
-| Domain-specific factual advice | Pondera structures judgment; it does not know live prices, reviews, or expert facts |
+| Domain-specific factual advice | Optium structures judgment; it does not know live prices, reviews, or expert facts |
 | Real-time data feeds | Users provide scores based on their own information |
 | Black-box recommendations | The criteria, weights, and scores should remain visible and editable |
 | Full LLM reasoning | The framework is the advice; the app parses structure rather than generating persuasive prose |

@@ -46,13 +46,15 @@ export default function Layout({ children }: LayoutProps) {
           <div className="flex items-center gap-6">
             <Link to="/" className="flex items-center gap-2 font-bold text-lg">
               <Brain className="h-6 w-6 text-primary" />
-              <span>Pondera</span>
+              <span>Optium</span>
             </Link>
             <nav className="hidden md:flex items-center gap-1">
               {navLinks.map((link) => (
                 <Button
                   key={link.href}
-                  variant={location.pathname === link.href ? "secondary" : "ghost"}
+                  variant={
+                    location.pathname === link.href ? "secondary" : "ghost"
+                  }
                   size="sm"
                   asChild
                 >
@@ -63,8 +65,17 @@ export default function Layout({ children }: LayoutProps) {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={toggleDark} aria-label="Toggle theme">
-              {dark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleDark}
+              aria-label="Toggle theme"
+            >
+              {dark ? (
+                <Sun className="h-5 w-5" />
+              ) : (
+                <Moon className="h-5 w-5" />
+              )}
             </Button>
             <Button
               variant="ghost"
@@ -73,7 +84,11 @@ export default function Layout({ children }: LayoutProps) {
               onClick={() => setMobileOpen(!mobileOpen)}
               aria-label="Toggle menu"
             >
-              {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+              {mobileOpen ? (
+                <X className="h-5 w-5" />
+              ) : (
+                <Menu className="h-5 w-5" />
+              )}
             </Button>
           </div>
         </div>
@@ -83,7 +98,9 @@ export default function Layout({ children }: LayoutProps) {
             {navLinks.map((link) => (
               <Button
                 key={link.href}
-                variant={location.pathname === link.href ? "secondary" : "ghost"}
+                variant={
+                  location.pathname === link.href ? "secondary" : "ghost"
+                }
                 size="sm"
                 className="w-full justify-start"
                 asChild
@@ -100,8 +117,13 @@ export default function Layout({ children }: LayoutProps) {
 
       <footer className="border-t py-6">
         <div className="container flex flex-col items-center gap-1 text-center text-sm text-muted-foreground">
-          <p className="font-semibold">Pondera — Multi-Criteria Decision Analysis</p>
-          <p>Structured MCDA workflows for comparing, diagnosing, screening, and ranking options.</p>
+          <p className="font-semibold">
+            Optium — Multi-Criteria Decision Analysis
+          </p>
+          <p>
+            Structured MCDA workflows for comparing, diagnosing, screening, and
+            ranking options.
+          </p>
         </div>
       </footer>
     </div>

@@ -21,7 +21,11 @@ export function recomputeFitScores(
   const results: FitResult[] = activities.map((act) => {
     let numerator = 0;
     let denominator = 0;
-    const weightedScores: { metric_id: number; score: number; weight: number }[] = [];
+    const weightedScores: {
+      metric_id: number;
+      score: number;
+      weight: number;
+    }[] = [];
     for (const row of rows) {
       const weight = metricWeightOverrides[row.metric_name] ?? row.weight;
       const score = row.scores[act.id] ?? 0;

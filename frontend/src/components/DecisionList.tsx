@@ -20,7 +20,8 @@ export default function DecisionList() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    api.getDecisions()
+    api
+      .getDecisions()
       .then((res: DecisionListResponse) => setDecisions(res.decisions))
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -30,7 +31,7 @@ export default function DecisionList() {
     if (!confirm("Delete this decision?")) return;
     try {
       await api.deleteDecision(id);
-      setDecisions(prev => prev.filter(d => d.id !== id));
+      setDecisions((prev) => prev.filter((d) => d.id !== id));
     } catch (e: any) {
       alert(e.message);
     }
@@ -58,7 +59,10 @@ export default function DecisionList() {
       ) : (
         <div className="grid gap-4">
           {decisions.map((d) => (
-            <Card key={d.id} className="cursor-pointer hover:border-primary/50 transition-colors">
+            <Card
+              key={d.id}
+              className="cursor-pointer hover:border-primary/50 transition-colors"
+            >
               <CardContent className="p-4 flex items-center justify-between">
                 <div className="flex-1" onClick={() => navigate(modeUrl(d))}>
                   <div className="flex items-center gap-2 mb-1">
@@ -66,19 +70,31 @@ export default function DecisionList() {
                       {d.mode || "choose"}
                     </Badge>
                     <span className="text-sm text-muted-foreground">
-                      {d.created_at ? new Date(d.created_at).toLocaleDateString() : ""}
+                      {d.created_at
+                        ? new Date(d.created_at).toLocaleDateString()
+                        : ""}
                     </span>
                   </div>
                   <p className="font-medium">{d.query}</p>
                   {d.category && (
-                    <p className="text-sm text-muted-foreground">{d.category}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {d.category}
+                    </p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="icon" onClick={() => navigate(modeUrl(d))}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => navigate(modeUrl(d))}
+                  >
                     <ExternalLink className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" onClick={() => handleDelete(d.id)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleDelete(d.id)}
+                  >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 </div>

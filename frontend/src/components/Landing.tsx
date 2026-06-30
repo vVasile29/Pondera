@@ -21,8 +21,7 @@ const modeBadgeClass: Record<string, string> = {
     "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800",
   diagnose:
     "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-green-200 dark:border-green-800",
-  rank:
-    "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800",
+  rank: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800",
   screen:
     "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 border-purple-200 dark:border-purple-800",
 };
@@ -52,7 +51,9 @@ export default function Landing() {
       const res = await api.decide(query.trim());
       navigate(res.redirect_url);
     } catch (err: any) {
-      setError(err.message || "Failed to process your question. Please try again.");
+      setError(
+        err.message || "Failed to process your question. Please try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -104,8 +105,8 @@ export default function Landing() {
             What's your decision today?
           </h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Turn a messy question into a weighted scoring matrix with universal criteria,
-            clear tradeoffs, and a defensible winner.
+            Turn a messy question into a weighted scoring matrix with universal
+            criteria, clear tradeoffs, and a defensible winner.
           </p>
         </div>
 
@@ -133,7 +134,8 @@ export default function Landing() {
             <p className="text-sm text-destructive text-left">{error}</p>
           )}
           <p className="text-xs text-muted-foreground">
-            No account required. Review extracted alternatives and criteria before scoring.
+            No account required. Review extracted alternatives and criteria
+            before scoring.
           </p>
         </form>
       </section>
@@ -160,10 +162,12 @@ export default function Landing() {
           <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
             How it works
           </p>
-          <h2 className="text-3xl font-bold">From question to ranked result in minutes</h2>
+          <h2 className="text-3xl font-bold">
+            From question to ranked result in minutes
+          </h2>
           <p className="text-muted-foreground max-w-xl mx-auto">
-            Use Pondera to structure judgment, not replace it. You stay in control of
-            criteria, weights, alternatives, and scores.
+            Use Optium to structure judgment, not replace it. You stay in
+            control of criteria, weights, alternatives, and scores.
           </p>
         </div>
         <div className="grid gap-6 md:grid-cols-3">
@@ -172,8 +176,8 @@ export default function Landing() {
               <span className="text-3xl font-bold text-primary">01</span>
               <h3 className="font-semibold text-lg">Parse the prompt</h3>
               <p className="text-sm text-muted-foreground">
-                Extract alternatives from &ldquo;or&rdquo;, &ldquo;vs&rdquo;, lists, or
-                single-subject evaluations.
+                Extract alternatives from &ldquo;or&rdquo;, &ldquo;vs&rdquo;,
+                lists, or single-subject evaluations.
               </p>
             </CardContent>
           </Card>
@@ -182,8 +186,8 @@ export default function Landing() {
               <span className="text-3xl font-bold text-primary">02</span>
               <h3 className="font-semibold text-lg">Review criteria</h3>
               <p className="text-sm text-muted-foreground">
-                Select universal MCDA metrics and tune weights before committing to a
-                scoring model.
+                Select universal MCDA metrics and tune weights before committing
+                to a scoring model.
               </p>
             </CardContent>
           </Card>
@@ -192,8 +196,8 @@ export default function Landing() {
               <span className="text-3xl font-bold text-primary">03</span>
               <h3 className="font-semibold text-lg">Score tradeoffs</h3>
               <p className="text-sm text-muted-foreground">
-                Rate each option on a consistent 0–100 scale and let weighted-sum scoring
-                do the math.
+                Rate each option on a consistent 0–100 scale and let
+                weighted-sum scoring do the math.
               </p>
             </CardContent>
           </Card>
@@ -206,31 +210,46 @@ export default function Landing() {
           <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
             Decision science
           </p>
-          <h2 className="text-3xl font-bold">Built around Multi-Criteria Decision Analysis</h2>
+          <h2 className="text-3xl font-bold">
+            Built around Multi-Criteria Decision Analysis
+          </h2>
           <p className="text-muted-foreground">
-            Pondera is grounded in Multi-Criteria Decision Analysis principles, including
-            weighted-sum scoring and Value-Focused Thinking&ndash;style attention to explicit
-            values. It turns preferences into inspectable criteria, weights, and 0–100 scores
+            Optium is grounded in Multi-Criteria Decision Analysis principles,
+            including weighted-sum scoring and Value-Focused
+            Thinking&ndash;style attention to explicit values. It turns
+            preferences into inspectable criteria, weights, and 0–100 scores
             rather than presenting a black-box answer.
           </p>
           <p className="text-muted-foreground">
-            Its six global value dimensions&mdash;Financial, Quality, Time, Risk, Experience, and
-            Convenience&mdash;are inspired by broad MCDA frameworks such as Keeney&rsquo;s
-            Value-Focused Thinking and Belton &amp; Stewart&rsquo;s MCDA work. They provide a
-            reusable starting ontology while leaving final judgment with you.
+            Its six global value dimensions&mdash;Financial, Quality, Time,
+            Risk, Experience, and Convenience&mdash;are inspired by broad MCDA
+            frameworks such as Keeney&rsquo;s Value-Focused Thinking and Belton
+            &amp; Stewart&rsquo;s MCDA work. They provide a reusable starting
+            ontology while leaving final judgment with you.
           </p>
         </div>
         <Card>
           <CardContent className="pt-6">
-            <h3 className="font-semibold text-lg mb-4">Universal criteria framework</h3>
+            <h3 className="font-semibold text-lg mb-4">
+              Universal criteria framework
+            </h3>
             <div className="flex flex-wrap gap-2">
-              {["Financial", "Quality", "Time", "Risk", "Experience", "Convenience"].map(
-                (dim) => (
-                  <Badge key={dim} variant="secondary" className="text-sm px-3 py-1">
-                    {dim}
-                  </Badge>
-                )
-              )}
+              {[
+                "Financial",
+                "Quality",
+                "Time",
+                "Risk",
+                "Experience",
+                "Convenience",
+              ].map((dim) => (
+                <Badge
+                  key={dim}
+                  variant="secondary"
+                  className="text-sm px-3 py-1"
+                >
+                  {dim}
+                </Badge>
+              ))}
             </div>
           </CardContent>
         </Card>
@@ -243,9 +262,9 @@ export default function Landing() {
         </p>
         <h2 className="text-3xl font-bold">One unified decision flow</h2>
         <p className="text-muted-foreground max-w-xl mx-auto">
-          Describe your decision naturally. Pondera automatically detects comparisons,
-          rankings, or single-option evaluations from your prompt &mdash; no mode selection
-          needed.
+          Describe your decision naturally. Optium automatically detects
+          comparisons, rankings, or single-option evaluations from your prompt
+          &mdash; no mode selection needed.
         </p>
         <div className="flex justify-center gap-4 pt-2">
           <div className="flex items-center gap-1 text-sm text-muted-foreground">
@@ -296,14 +315,17 @@ export default function Landing() {
                 <CardContent className="pt-6">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0 space-y-2">
-                      <p className="font-semibold line-clamp-2">{decision.query}</p>
+                      <p className="font-semibold line-clamp-2">
+                        {decision.query}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         {formatDate(decision.created_at)}
                       </p>
                       <div className="flex flex-wrap gap-1">
                         <Badge
                           className={
-                            modeBadgeClass[decision.mode] || modeBadgeClass.choose
+                            modeBadgeClass[decision.mode] ||
+                            modeBadgeClass.choose
                           }
                         >
                           {decision.mode}

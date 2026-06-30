@@ -160,8 +160,12 @@ def test_decide_flow_parsed(client, db):
     assert response.status_code == 200
     data = response.json()
     assert data["mode"] == "choose"
-    assert "house" in str(data["alternatives"]).lower() or "House" in str(data["alternatives"])
-    assert "apartment" in str(data["alternatives"]).lower() or "Apartment" in str(data["alternatives"])
+    assert "house" in str(data["alternatives"]).lower() or "House" in str(
+        data["alternatives"]
+    )
+    assert "apartment" in str(data["alternatives"]).lower() or "Apartment" in str(
+        data["alternatives"]
+    )
 
 
 def test_decide_flow_with_do_verb(client, db):
@@ -170,8 +174,12 @@ def test_decide_flow_with_do_verb(client, db):
     assert response.status_code == 200
     data = response.json()
     assert data["mode"] == "choose"
-    assert "Aikido" in str(data["alternatives"]) or "aikido" in str(data["alternatives"])
-    assert "Football" in str(data["alternatives"]) or "football" in str(data["alternatives"])
+    assert "Aikido" in str(data["alternatives"]) or "aikido" in str(
+        data["alternatives"]
+    )
+    assert "Football" in str(data["alternatives"]) or "football" in str(
+        data["alternatives"]
+    )
 
 
 def test_review_page_get(client, db):
@@ -187,8 +195,12 @@ def test_review_page_get(client, db):
     assert review_resp.status_code == 200
     review_data = review_resp.json()
     assert "alternatives" in review_data
-    assert "Tea" in str(review_data["alternatives"]) or "tea" in str(review_data["alternatives"])
-    assert "Coffee" in str(review_data["alternatives"]) or "coffee" in str(review_data["alternatives"])
+    assert "Tea" in str(review_data["alternatives"]) or "tea" in str(
+        review_data["alternatives"]
+    )
+    assert "Coffee" in str(review_data["alternatives"]) or "coffee" in str(
+        review_data["alternatives"]
+    )
 
 
 def test_delete_decision(client, db):
@@ -430,7 +442,6 @@ def test_full_decision_flow(client, db):
     assert "Coffee" in activity_names
 
     # Step 4: Submit scores via the API endpoint
-    import re
 
     score_resp = client.post(
         f"/api/decisions/{decision_id}/score",
@@ -496,7 +507,7 @@ def test_seeded_metrics_on_list_page(client, db):
     """Test that seeded universal metrics show on the metrics page."""
     response = client.get("/metrics")
     assert response.status_code == 200
-    data = response.json()
+    response.json()
     # Use the API endpoint to get grouped metrics
     api_resp = client.get("/api/metrics")
     assert api_resp.status_code == 200
@@ -605,9 +616,7 @@ def test_evaluate_flow(client, db):
         score_resp = client.post(
             f"/api/decisions/{decision_id}/score",
             json={
-                "scores": [
-                    {"activity_id": act_id, "metric_id": met_id, "score": 85}
-                ]
+                "scores": [{"activity_id": act_id, "metric_id": met_id, "score": 85}]
             },
         )
         assert score_resp.status_code == 200
@@ -1015,9 +1024,7 @@ def test_decision_apply_thresholds_valid(client, db):
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
         json={
-            "thresholds": [
-                {"metric_id": metric_id, "operator": "<=", "value": 60.0}
-            ]
+            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": 60.0}]
         },
     )
     assert resp.status_code == 200
@@ -1049,11 +1056,7 @@ def test_decision_apply_thresholds_invalid_range(client, db):
 
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
-        json={
-            "thresholds": [
-                {"metric_id": metric_id, "operator": "<=", "value": 150}
-            ]
-        },
+        json={"thresholds": [{"metric_id": metric_id, "operator": "<=", "value": 150}]},
     )
     assert resp.status_code == 422
     data = resp.json()
@@ -1074,9 +1077,7 @@ def test_decision_apply_thresholds_invalid_non_numeric(client, db):
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
         json={
-            "thresholds": [
-                {"metric_id": metric_id, "operator": "<=", "value": "abc"}
-            ]
+            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": "abc"}]
         },
     )
     assert resp.status_code == 422
@@ -1124,9 +1125,7 @@ def test_decision_thresholds_no_scores(client, db):
     resp = client.post(
         f"/api/decisions/{decision_id}/thresholds",
         json={
-            "thresholds": [
-                {"metric_id": metric_id, "operator": "<=", "value": 60.0}
-            ]
+            "thresholds": [{"metric_id": metric_id, "operator": "<=", "value": 60.0}]
         },
     )
     assert resp.status_code == 200
@@ -1153,9 +1152,7 @@ def test_decision_threshold_criteria_prepopulation(client, db):
     client.post(
         f"/api/decisions/{decision_id}/thresholds",
         json={
-            "thresholds": [
-                {"metric_id": metric_id, "operator": ">=", "value": 75.0}
-            ]
+            "thresholds": [{"metric_id": metric_id, "operator": ">=", "value": 75.0}]
         },
     )
 
@@ -1253,7 +1250,9 @@ def test_result_pages_use_significance_without_legacy_wording(client, db):
     data = response.json()
     # The API response should include significance data
     if data.get("significance"):
-        assert "p_value" in data["significance"] or "p-value" in str(data["significance"])
+        assert "p_value" in data["significance"] or "p-value" in str(
+            data["significance"]
+        )
 
 
 def test_slider_fill_markup_and_sensitivity_classes(client, db):

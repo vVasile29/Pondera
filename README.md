@@ -1,8 +1,8 @@
-# Pondera
+# Optium
 
 A **multi-criteria decision engine** that turns natural language questions into weighted scoring matrices.
 
-Type a question like "should I buy a house or an apartment?", "rank Python, Java, Go", or "how good is a Tesla for commuting?". Pondera parses the prompt, infers whether you are evaluating one option, comparing two, or ranking many, suggests universal criteria, lets you tweak weights and scores, and shows the result with radar charts and score tables.
+Type a question like "should I buy a house or an apartment?", "rank Python, Java, Go", or "how good is a Tesla for commuting?". Optium parses the prompt, infers whether you are evaluating one option, comparing two, or ranking many, suggests universal criteria, lets you tweak weights and scores, and shows the result with radar charts and score tables.
 
 ## Features
 

@@ -1,4 +1,4 @@
-"""Backend JSON API layer for Pondera.
+"""Backend JSON API layer for Optium.
 
 Provides RESTful JSON endpoints mirroring the existing HTML form-based flow.
 Allows headless access for frontend frameworks (e.g., Vue, React via localhost:5173).

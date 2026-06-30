@@ -2,12 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useDecision } from "@/hooks/useDecision";
 import { api } from "@/lib/api";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -168,9 +163,7 @@ export default function RankReview() {
 
       navigate(`/decisions/${numId}/score`);
     } catch (e: any) {
-      setSubmitError(
-        e.message || "Failed to save changes. Please try again.",
-      );
+      setSubmitError(e.message || "Failed to save changes. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -216,8 +209,8 @@ export default function RankReview() {
             </span>
           ) : (
             <span className="text-muted-foreground">
-              Enter 3+ alternatives to rank. Make sure you have at least 3
-              items for a meaningful ranking.
+              Enter 3+ alternatives to rank. Make sure you have at least 3 items
+              for a meaningful ranking.
             </span>
           )}
         </div>
@@ -316,9 +309,7 @@ export default function RankReview() {
                     <div className="flex items-center gap-2 flex-1 min-w-0">
                       <Slider
                         value={[metricWeights[metric.id] ?? 50]}
-                        onValueChange={(v) =>
-                          handleWeightChange(metric.id, v)
-                        }
+                        onValueChange={(v) => handleWeightChange(metric.id, v)}
                         min={0}
                         max={100}
                         step={1}

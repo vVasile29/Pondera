@@ -1,12 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useDecision } from "@/hooks/useDecision";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -28,19 +23,39 @@ import type { FitResult } from "@/types";
 import { recomputeFitScores } from "@/lib/scoring";
 
 const RANK_META = [
-  { bg: "bg-yellow-100 dark:bg-yellow-900/30", text: "text-yellow-700 dark:text-yellow-400", border: "border-yellow-400", ring: "ring-yellow-400", label: "1st" },
-  { bg: "bg-gray-100 dark:bg-gray-800", text: "text-gray-500 dark:text-gray-400", border: "border-gray-400", ring: "ring-gray-400", label: "2nd" },
-  { bg: "bg-amber-100 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-400", border: "border-amber-700", ring: "ring-amber-700", label: "3rd" },
+  {
+    bg: "bg-yellow-100 dark:bg-yellow-900/30",
+    text: "text-yellow-700 dark:text-yellow-400",
+    border: "border-yellow-400",
+    ring: "ring-yellow-400",
+    label: "1st",
+  },
+  {
+    bg: "bg-gray-100 dark:bg-gray-800",
+    text: "text-gray-500 dark:text-gray-400",
+    border: "border-gray-400",
+    ring: "ring-gray-400",
+    label: "2nd",
+  },
+  {
+    bg: "bg-amber-100 dark:bg-amber-900/30",
+    text: "text-amber-700 dark:text-amber-400",
+    border: "border-amber-700",
+    ring: "ring-amber-700",
+    label: "3rd",
+  },
 ];
 
 function rankMeta(index: number) {
-  return RANK_META[index] ?? {
-    bg: "bg-muted",
-    text: "text-muted-foreground",
-    border: "border-border",
-    ring: "ring-border",
-    label: `${index + 1}th`,
-  };
+  return (
+    RANK_META[index] ?? {
+      bg: "bg-muted",
+      text: "text-muted-foreground",
+      border: "border-border",
+      ring: "ring-border",
+      label: `${index + 1}th`,
+    }
+  );
 }
 
 export default function Results() {
@@ -50,7 +65,9 @@ export default function Results() {
 
   const [tableOpen, setTableOpen] = useState(false);
   const [sensitivityOpen, setSensitivityOpen] = useState(false);
-  const [metricWeights, setMetricWeights] = useState<Record<string, number>>({});
+  const [metricWeights, setMetricWeights] = useState<Record<string, number>>(
+    {},
+  );
 
   const decisionId = id ? parseInt(id) : 0;
   const mode = data?.decision?.mode ?? "choose";
@@ -67,16 +84,20 @@ export default function Results() {
   // Client-side recomputed results (for sensitivity analysis)
   const displayResults = useMemo<FitResult[]>(() => {
     if (!data?.results || data.results.length === 0) return [];
-    if (!data.rows || Object.keys(metricWeights).length === 0) return data.results;
-    return recomputeFitScores(data.activities, data.rows, metricWeights, data.metrics);
+    if (!data.rows || Object.keys(metricWeights).length === 0)
+      return data.results;
+    return recomputeFitScores(
+      data.activities,
+      data.rows,
+      metricWeights,
+      data.metrics,
+    );
   }, [data, metricWeights]);
 
   // Whether actual scores have been submitted (rows contain non-zero scores)
   const hasScores = useMemo(() => {
     if (!data?.rows) return false;
-    return data.rows.some(
-      (row) => Object.values(row.scores).length > 0,
-    );
+    return data.rows.some((row) => Object.values(row.scores).length > 0);
   }, [data]);
 
   const maxFitPct = useMemo(() => {
@@ -119,9 +140,7 @@ export default function Results() {
         </div>
         <Card>
           <CardContent className="py-12 text-center space-y-4">
-            <p className="text-muted-foreground text-lg">
-              No scores yet.
-            </p>
+            <p className="text-muted-foreground text-lg">No scores yet.</p>
             <p className="text-sm text-muted-foreground">
               Score your alternatives to see the results.
             </p>
@@ -269,8 +288,7 @@ export default function Results() {
                 Adjust weights to see how rankings change in real time.
               </p>
               {data.rows.map((row) => {
-                const w =
-                  metricWeights[row.metric_name] ?? row.weight;
+                const w = metricWeights[row.metric_name] ?? row.weight;
                 return (
                   <div
                     key={row.metric_name}
@@ -396,10 +414,7 @@ export default function Results() {
                     {data.activities.map((act) => {
                       const scoreVal = row.scores[act.id] ?? 0;
                       return (
-                        <div
-                          key={act.id}
-                          className="flex items-center gap-2"
-                        >
+                        <div key={act.id} className="flex items-center gap-2">
                           <span className="text-xs font-medium w-24 truncate shrink-0">
                             {act.name}
                           </span>

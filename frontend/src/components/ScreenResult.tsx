@@ -1,12 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -28,19 +23,39 @@ import type { DecisionDetail, FitResult } from "@/types";
 import { recomputeFitScores } from "@/lib/scoring";
 
 const RANK_META = [
-  { bg: "bg-yellow-100 dark:bg-yellow-900/30", text: "text-yellow-700 dark:text-yellow-400", border: "border-yellow-400", ring: "ring-yellow-400", label: "1st" },
-  { bg: "bg-gray-100 dark:bg-gray-800", text: "text-gray-500 dark:text-gray-400", border: "border-gray-400", ring: "ring-gray-400", label: "2nd" },
-  { bg: "bg-amber-100 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-400", border: "border-amber-700", ring: "ring-amber-700", label: "3rd" },
+  {
+    bg: "bg-yellow-100 dark:bg-yellow-900/30",
+    text: "text-yellow-700 dark:text-yellow-400",
+    border: "border-yellow-400",
+    ring: "ring-yellow-400",
+    label: "1st",
+  },
+  {
+    bg: "bg-gray-100 dark:bg-gray-800",
+    text: "text-gray-500 dark:text-gray-400",
+    border: "border-gray-400",
+    ring: "ring-gray-400",
+    label: "2nd",
+  },
+  {
+    bg: "bg-amber-100 dark:bg-amber-900/30",
+    text: "text-amber-700 dark:text-amber-400",
+    border: "border-amber-700",
+    ring: "ring-amber-700",
+    label: "3rd",
+  },
 ];
 
 function rankMeta(index: number) {
-  return RANK_META[index] ?? {
-    bg: "bg-muted",
-    text: "text-muted-foreground",
-    border: "border-border",
-    ring: "ring-border",
-    label: `${index + 1}th`,
-  };
+  return (
+    RANK_META[index] ?? {
+      bg: "bg-muted",
+      text: "text-muted-foreground",
+      border: "border-border",
+      ring: "ring-border",
+      label: `${index + 1}th`,
+    }
+  );
 }
 
 export default function ScreenResult() {
@@ -53,7 +68,9 @@ export default function ScreenResult() {
 
   const [tableOpen, setTableOpen] = useState(false);
   const [sensitivityOpen, setSensitivityOpen] = useState(false);
-  const [metricWeights, setMetricWeights] = useState<Record<string, number>>({});
+  const [metricWeights, setMetricWeights] = useState<Record<string, number>>(
+    {},
+  );
 
   const decisionId = id ? parseInt(id) : 0;
 
@@ -81,16 +98,20 @@ export default function ScreenResult() {
   // Client-side recomputed results (for sensitivity analysis)
   const displayResults = useMemo<FitResult[]>(() => {
     if (!data?.results || data.results.length === 0) return [];
-    if (!data.rows || Object.keys(metricWeights).length === 0) return data.results;
-    return recomputeFitScores(data.activities, data.rows, metricWeights, data.metrics);
+    if (!data.rows || Object.keys(metricWeights).length === 0)
+      return data.results;
+    return recomputeFitScores(
+      data.activities,
+      data.rows,
+      metricWeights,
+      data.metrics,
+    );
   }, [data, metricWeights]);
 
   // Whether actual scores have been submitted
   const hasScores = useMemo(() => {
     if (!data?.rows) return false;
-    return data.rows.some(
-      (row) => Object.values(row.scores).length > 0,
-    );
+    return data.rows.some((row) => Object.values(row.scores).length > 0);
   }, [data]);
 
   const filterResult = data?.filter_result;
@@ -146,9 +167,7 @@ export default function ScreenResult() {
         <Card>
           <CardContent className="py-12 text-center space-y-4">
             <Info className="h-12 w-12 mx-auto text-muted-foreground" />
-            <p className="text-muted-foreground text-lg">
-              No scores yet.
-            </p>
+            <p className="text-muted-foreground text-lg">No scores yet.</p>
             <p className="text-sm text-muted-foreground">
               Score your alternatives to see pass/fail results.
             </p>
@@ -206,14 +225,15 @@ export default function ScreenResult() {
             <CardTitle className="text-xl flex items-center gap-2">
               Pass / Fail
               {filterResult.all_passed && passed.length > 0 && (
-                <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                <Badge
+                  variant="secondary"
+                  className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                >
                   All Passed
                 </Badge>
               )}
               {passed.length === 0 && failed.length > 0 && (
-                <Badge variant="destructive">
-                  All Failed
-                </Badge>
+                <Badge variant="destructive">All Failed</Badge>
               )}
             </CardTitle>
           </CardHeader>
@@ -334,7 +354,10 @@ export default function ScreenResult() {
         <Card>
           <CardContent className="py-6 text-center text-muted-foreground">
             <XCircle className="h-8 w-8 mx-auto mb-2" />
-            <p>No alternatives passed all thresholds, so there are no survivors to rank.</p>
+            <p>
+              No alternatives passed all thresholds, so there are no survivors
+              to rank.
+            </p>
           </CardContent>
         </Card>
       )}
@@ -515,10 +538,7 @@ export default function ScreenResult() {
                     {data.activities.map((act) => {
                       const scoreVal = row.scores[act.id] ?? 0;
                       return (
-                        <div
-                          key={act.id}
-                          className="flex items-center gap-2"
-                        >
+                        <div key={act.id} className="flex items-center gap-2">
                           <span className="text-xs font-medium w-24 truncate shrink-0">
                             {act.name}
                           </span>

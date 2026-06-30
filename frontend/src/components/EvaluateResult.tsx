@@ -2,12 +2,7 @@ import { useState, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useEvaluate } from "@/hooks/useEvaluate";
 import { api } from "@/lib/api";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -137,9 +132,7 @@ export default function EvaluateResult() {
       <div className="container mx-auto py-8 px-4 max-w-4xl space-y-8">
         <div>
           <h1 className="text-3xl font-bold">Evaluation Result</h1>
-          <p className="text-muted-foreground mt-1">
-            {data.decision.query}
-          </p>
+          <p className="text-muted-foreground mt-1">{data.decision.query}</p>
         </div>
 
         {submitError && (
@@ -156,8 +149,7 @@ export default function EvaluateResult() {
           </CardHeader>
           <CardContent className="space-y-6">
             {data.metrics.map((metric) => {
-              const val =
-                inlineScores[`${actId}_${metric.id}`] ?? 0;
+              const val = inlineScores[`${actId}_${metric.id}`] ?? 0;
               return (
                 <div key={metric.id} className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -177,9 +169,7 @@ export default function EvaluateResult() {
                   </div>
                   <Slider
                     value={[val]}
-                    onValueChange={(v) =>
-                      handleScoreChange(metric.id, v)
-                    }
+                    onValueChange={(v) => handleScoreChange(metric.id, v)}
                     min={0}
                     max={100}
                     step={1}
@@ -227,17 +217,13 @@ export default function EvaluateResult() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h1 className="text-3xl font-bold">Evaluation Result</h1>
-            <p className="text-muted-foreground mt-1">
-              {data.decision.query}
-            </p>
+            <p className="text-muted-foreground mt-1">{data.decision.query}</p>
           </div>
           <ExportButton decisionId={decisionId} mode="diagnose" />
         </div>
         <Card>
           <CardContent className="py-12 text-center space-y-4">
-            <p className="text-muted-foreground text-lg">
-              No results yet.
-            </p>
+            <p className="text-muted-foreground text-lg">No results yet.</p>
             <p className="text-sm text-muted-foreground">
               Score the subject to see evaluation results.
             </p>
@@ -258,9 +244,7 @@ export default function EvaluateResult() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Evaluation Result</h1>
-          <p className="text-muted-foreground mt-1">
-            {data.decision.query}
-          </p>
+          <p className="text-muted-foreground mt-1">{data.decision.query}</p>
         </div>
         <ExportButton decisionId={decisionId} mode="diagnose" />
       </div>
@@ -290,9 +274,7 @@ export default function EvaluateResult() {
       {dimensionBreakdown.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-xl">
-              Dimension Breakdown
-            </CardTitle>
+            <CardTitle className="text-xl">Dimension Breakdown</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {dimensionBreakdown.map((d) => (
@@ -300,9 +282,7 @@ export default function EvaluateResult() {
                 key={d.dimension}
                 className="flex items-center gap-4 flex-wrap"
               >
-                <span className="font-medium w-28 shrink-0">
-                  {d.dimension}
-                </span>
+                <span className="font-medium w-28 shrink-0">{d.dimension}</span>
                 <div className="flex-1 min-w-[120px]">
                   <div className="h-3 w-full bg-muted rounded-full overflow-hidden">
                     <div
@@ -495,9 +475,7 @@ export default function EvaluateResult() {
               {data.rows.map((row) => (
                 <Card key={row.metric_name}>
                   <CardContent className="p-3 space-y-2">
-                    <div className="font-medium text-sm">
-                      {row.metric_name}
-                    </div>
+                    <div className="font-medium text-sm">{row.metric_name}</div>
                     {row.metric_desc && (
                       <div className="text-xs text-muted-foreground">
                         {row.metric_desc}
@@ -509,10 +487,7 @@ export default function EvaluateResult() {
                     {data.activities.map((act) => {
                       const scoreVal = row.scores[act.id] ?? 0;
                       return (
-                        <div
-                          key={act.id}
-                          className="flex items-center gap-2"
-                        >
+                        <div key={act.id} className="flex items-center gap-2">
                           <span className="text-xs font-medium w-24 truncate shrink-0">
                             {act.name}
                           </span>

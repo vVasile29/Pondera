@@ -260,7 +260,7 @@ def _compute_screen_validation(query: str, metric_map: dict) -> dict:
         for o in detailed["out_of_range"]
     ]
     help_text = (
-        "Screen uses Pondera's 0–100 score scale. "
+        "Screen uses Optium's 0–100 score scale. "
         "Supported metrics: Cost, Value, Quality, Performance, "
         "Time Required, Efficiency, Risk, Safety, Enjoyment, "
         "Satisfaction, Convenience, Accessibility."

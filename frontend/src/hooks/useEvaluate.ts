@@ -22,7 +22,9 @@ export function useEvaluate(id: string | undefined) {
     }
   }, [id]);
 
-  useEffect(() => { fetch(); }, [fetch]);
+  useEffect(() => {
+    fetch();
+  }, [fetch]);
 
   return { data, loading, error, refetch: fetch };
 }

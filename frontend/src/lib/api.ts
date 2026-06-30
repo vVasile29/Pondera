@@ -58,7 +58,10 @@ export const api = {
   },
 
   /** Submit scores and get computed results. */
-  submitScores(id: number, scores: ScorePayload["scores"]): Promise<ScoreResponse> {
+  submitScores(
+    id: number,
+    scores: ScorePayload["scores"],
+  ): Promise<ScoreResponse> {
     return request(`/decisions/${id}/score`, {
       method: "POST",
       body: JSON.stringify({ scores }),
@@ -66,7 +69,10 @@ export const api = {
   },
 
   /** Apply threshold filters on a result page. */
-  applyThresholds(id: number, thresholds: ThresholdsPayload["thresholds"]): Promise<ThresholdsResponse> {
+  applyThresholds(
+    id: number,
+    thresholds: ThresholdsPayload["thresholds"],
+  ): Promise<ThresholdsResponse> {
     return request(`/decisions/${id}/thresholds`, {
       method: "POST",
       body: JSON.stringify({ thresholds }),
@@ -109,7 +115,10 @@ export const api = {
   },
 
   /** Update an existing metric. */
-  updateMetric(id: number, data: MetricUpdatePayload): Promise<MetricCRUDResponse> {
+  updateMetric(
+    id: number,
+    data: MetricUpdatePayload,
+  ): Promise<MetricCRUDResponse> {
     return request(`/metrics/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),

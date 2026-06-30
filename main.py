@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Pondera", lifespan=lifespan)
+app = FastAPI(title="Optium", lifespan=lifespan)
 
 # CORS — allow the Vite dev server origin
 app.add_middleware(
@@ -81,14 +81,16 @@ def index(request: Request, db: Session = Depends(get_db)):
             "screen": f"/screen/{d.id}/result",
             "rank": f"/rank/{d.id}/result",
         }.get(mode, f"/decisions/{d.id}/result")
-        result.append({
-            "id": d.id,
-            "query": d.query,
-            "mode": mode,
-            "category": d.category,
-            "created_at": d.created_at.isoformat() if d.created_at else None,
-            "result_url": result_url,
-        })
+        result.append(
+            {
+                "id": d.id,
+                "query": d.query,
+                "mode": mode,
+                "category": d.category,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+                "result_url": result_url,
+            }
+        )
     return {"decisions": result}
 
 
