@@ -157,5 +157,7 @@ export default function RadarChart({ labels, datasets }: RadarChartProps) {
     },
   };
 
-  return <Radar data={data} options={options} />;
+  // key = isDark forces a full canvas remount when theme changes,
+  // because Chart.js doesn't reliably re-apply scale/plugin colours in-place
+  return <Radar key={String(isDark)} data={data} options={options} />;
 }
