@@ -18,6 +18,39 @@ Type a question like "should I buy a house or an apartment?", "rank Python, Java
 
 ## Quick Start
 
+### Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Open http://localhost:8080. Only the unprivileged nginx web container is published to the host; API requests go through the web container at `/api/*`.
+
+Docker base images are pinned by version and digest. Runtime Python dependencies, including transitive packages, are pinned in `requirements.txt`; test-only packages live in `requirements-dev.txt` and are not installed in the backend runtime image.
+
+Smoke checks:
+
+```bash
+curl http://localhost:8080
+curl http://localhost:8080/health
+curl http://localhost:8080/api/metrics
+docker compose ps
+```
+
+The backend stores SQLite data in the named `optium-data` volume mounted at `/data` with `DATABASE_URL=sqlite:////data/optium.db`. Data persists across restarts and normal shutdowns:
+
+```bash
+docker compose restart
+docker compose down
+```
+
+Use `docker compose down -v` only when you intentionally want to delete the persisted SQLite volume and all saved decisions.
+
+If your Compose implementation does not support health-based `depends_on`, rerun `docker compose up` after the API becomes healthy or use `docker compose ps` to inspect service health.
+
+### Local Development
+
 You need **two terminals** — one for the backend API and one for the frontend dev server.
 
 ### Backend
@@ -26,6 +59,7 @@ You need **two terminals** — one for the backend API and one for the frontend 
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
