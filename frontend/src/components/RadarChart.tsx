@@ -37,36 +37,24 @@ const COLORS = [
   { bg: "rgba(168, 85, 247, 0.2)", border: "rgb(168, 85, 247)" },
 ];
 
-/** Reactive hook: returns true when dark mode is active, tracking both
- *  the .dark class on <html> and the prefers-color-scheme media query. */
+/** Reactive hook: returns true when the .dark class is present on <html>.
+ *  Watches for class changes via MutationObserver so the chart updates
+ *  immediately when the user toggles the theme. */
 function useIsDark(): boolean {
   const [isDark, setIsDark] = useState(() => {
     if (typeof document === "undefined") return false;
-    return (
-      document.documentElement.classList.contains("dark") ||
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-    );
+    return document.documentElement.classList.contains("dark");
   });
 
   useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onMqChange = (e: MediaQueryListEvent) => setIsDark(e.matches);
-    mq.addEventListener("change", onMqChange);
-
     const observer = new MutationObserver(() => {
-      setIsDark(
-        document.documentElement.classList.contains("dark") || mq.matches,
-      );
+      setIsDark(document.documentElement.classList.contains("dark"));
     });
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["class"],
     });
-
-    return () => {
-      mq.removeEventListener("change", onMqChange);
-      observer.disconnect();
-    };
+    return () => observer.disconnect();
   }, []);
 
   return isDark;
