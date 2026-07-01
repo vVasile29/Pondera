@@ -23,13 +23,6 @@ export interface Metric {
   higher_is_better: boolean;
 }
 
-export interface AlternativeScore {
-  id: number;
-  activity_id: number;
-  metric_id: number;
-  score: number;
-}
-
 // ── Scoring ──
 
 export interface WeightedScore {

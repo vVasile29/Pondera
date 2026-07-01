@@ -121,8 +121,8 @@ export default function Layout({ children }: LayoutProps) {
             Optium — Multi-Criteria Decision Analysis
           </p>
           <p>
-            Structured MCDA workflows for comparing, diagnosing, screening, and
-            ranking options.
+            Structured MCDA workflows for comparing, diagnosing, and ranking
+            options.
           </p>
         </div>
       </footer>

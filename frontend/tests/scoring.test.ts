@@ -53,7 +53,6 @@ function names(results: FitResult[]) {
       metric_desc: "",
       higher_is_better: false,
       weight: 100,
-      weights: { 1: 100, 2: 100 },
       scores: { 1: 80, 2: 20 },
     },
   ];
@@ -72,7 +71,6 @@ function names(results: FitResult[]) {
       metric_desc: "",
       higher_is_better: false,
       weight: 50,
-      weights: { 1: 50, 2: 50 },
       scores: { 1: 30, 2: 70 },
     },
     {
@@ -81,7 +79,6 @@ function names(results: FitResult[]) {
       metric_desc: "",
       higher_is_better: true,
       weight: 50,
-      weights: { 1: 50, 2: 50 },
       scores: { 1: 80, 2: 60 },
     },
   ];
@@ -104,7 +101,6 @@ function names(results: FitResult[]) {
       metric_desc: "",
       higher_is_better: false,
       weight: 100,
-      weights: { 1: 100 },
       scores: { 1: 80, 2: 10 },
     },
     {
@@ -113,7 +109,6 @@ function names(results: FitResult[]) {
       metric_desc: "",
       higher_is_better: true,
       weight: 100,
-      weights: { 2: 100 },
       scores: { 1: 10, 2: 90 },
     },
   ];
@@ -126,9 +121,9 @@ function names(results: FitResult[]) {
   );
   const alpha = results.find((r) => r.activity_id === 1)!;
   const beta = results.find((r) => r.activity_id === 2)!;
-  assertDeepEqual(alpha.weighted_scores.map((s) => s.metric_id), [10]);
-  assertDeepEqual(beta.weighted_scores.map((s) => s.metric_id), [11]);
-  assertEqual(alpha.fit_score, 0.2);
+  assertDeepEqual(alpha.weighted_scores.map((s) => s.metric_id), [10, 11]);
+  assertDeepEqual(beta.weighted_scores.map((s) => s.metric_id), [10, 11]);
+  assertEqual(alpha.fit_score, 0.15);
   assertEqual(beta.fit_score, 0.9);
 }
 
@@ -143,7 +138,6 @@ function names(results: FitResult[]) {
       metric_desc: "",
       higher_is_better: true,
       weight: 100,
-      weights: { 1: 100, 2: 100 },
       scores: { 1: 81.245, 2: 81.244 },
     },
   ];

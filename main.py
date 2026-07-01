@@ -31,10 +31,6 @@ async def lifespan(app: FastAPI):
                     )
                     db.add(metric)
             db.commit()
-
-        # ── Note: legacy ActivityWeight → DecisionWeight migration removed ──
-        # If you still have an old `activity_weights` table in your database,
-        # reset or recreate the database. See README.md for instructions.
     finally:
         db.close()
     yield
