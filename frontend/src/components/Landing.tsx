@@ -13,7 +13,6 @@ import {
   Scale,
   BarChart3,
   Sparkles,
-  Layers,
 } from "lucide-react";
 
 const modeBadgeClass: Record<string, string> = {
@@ -22,8 +21,6 @@ const modeBadgeClass: Record<string, string> = {
   diagnose:
     "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-green-200 dark:border-green-800",
   rank: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800",
-  screen:
-    "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 border-purple-200 dark:border-purple-800",
 };
 
 export default function Landing() {
@@ -49,7 +46,7 @@ export default function Landing() {
     setError(null);
     try {
       const res = await api.decide(query.trim());
-      navigate(res.redirect_url);
+      navigate(`/decisions/${res.decision_id}/review`);
     } catch (err: any) {
       setError(
         err.message || "Failed to process your question. Please try again.",
@@ -72,9 +69,7 @@ export default function Landing() {
   };
 
   const navigateToResult = (decision: Decision) => {
-    if (decision.result_url) {
-      navigate(decision.result_url);
-    }
+    navigate(`/decisions/${decision.id}/result`);
   };
 
   const formatDate = (dateStr: string | null) => {
@@ -275,9 +270,6 @@ export default function Landing() {
           </div>
           <div className="flex items-center gap-1 text-sm text-muted-foreground">
             <Sparkles className="h-4 w-4" /> Diagnose
-          </div>
-          <div className="flex items-center gap-1 text-sm text-muted-foreground">
-            <Layers className="h-4 w-4" /> Screen
           </div>
         </div>
       </section>

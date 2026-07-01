@@ -26,7 +26,7 @@ export function filterResultsToSurvivors(
 
 /**
  * Recompute fit scores client-side given adjusted weights.
- * Used for sensitivity analysis in Results and ScreenResult.
+ * Used for sensitivity analysis in Results.
  * Pass `metrics` to map metric names to proper metric_ids/directions when rows
  * come from older API responses.
  */

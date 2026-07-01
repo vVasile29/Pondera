@@ -8,8 +8,6 @@ export interface Decision {
   mode: string;
   category: string | null;
   created_at: string | null;
-  /** Only present in list endpoint */
-  result_url?: string;
 }
 
 export interface Activity {
@@ -203,37 +201,11 @@ export interface GroupedMetric {
   name: string;
   category: string;
   description: string;
-  unit: string;
   higher_is_better: boolean;
-  children?: GroupedMetric[];
 }
 
 export interface MetricsResponse {
   grouped_metrics: Record<string, GroupedMetric[]>;
-}
-
-// ── Metric CRUD payloads ──
-
-export interface MetricCreatePayload {
-  name: string;
-  category: string;
-  description?: string;
-  unit?: string;
-  higher_is_better: boolean;
-}
-
-export interface MetricUpdatePayload {
-  name?: string;
-  category?: string;
-  description?: string;
-  unit?: string;
-  higher_is_better?: boolean;
-}
-
-export interface MetricCRUDResponse {
-  id: number;
-  name: string;
-  category?: string;
 }
 
 // ── API request payload types ──
@@ -241,7 +213,7 @@ export interface MetricCRUDResponse {
 export interface DecideResponse {
   decision_id: number;
   mode: string;
-  redirect_url: string;
+  next: string;
 }
 
 export interface RefinePayload {

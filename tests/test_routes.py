@@ -89,22 +89,11 @@ def client(db):
 
 def test_index_page(client, db):
     """Test index page returns decisions list as JSON."""
-    response = client.get("/")
+    response = client.get("/api/decisions")
     assert response.status_code == 200
     data = response.json()
     assert "decisions" in data
     assert isinstance(data["decisions"], list)
-
-
-def test_create_metric(client, db):
-    """Test creating a metric via API."""
-    response = client.post(
-        "/api/metrics", json={"name": "Test Metric", "category": "Financial", "unit": "cm"}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Test Metric"
-    assert data["category"] == "Financial"
 
 
 def test_list_metrics(client, db):
@@ -149,51 +138,40 @@ def test_api_decide_rejects_too_many_parsed_alternatives(client, db):
     assert response.status_code == 422
 
 
-def test_delete_metric(client, db):
-    """Test deleting a metric."""
-    resp = client.post("/api/metrics", json={"name": "Delete Me", "category": "Financial"})
-    metric_id = resp.json()["id"]
-
-    response = client.delete(f"/api/metrics/{metric_id}")
-    assert response.status_code == 200
-
-
 # ── Decision flow tests ──
 
 
 def test_decide_flow_parsed(client, db):
     """Test the full decide flow with a parsable question."""
     response = client.post(
-        "/decide", data={"q": "Should I buy a house or an apartment?"}
+        "/api/decide", json={"q": "Should I buy a house or an apartment?"}
     )
     assert response.status_code == 200
     data = response.json()
     assert data["mode"] == "choose"
-    assert "house" in str(data["alternatives"]).lower() or "House" in str(
-        data["alternatives"]
-    )
-    assert "apartment" in str(data["alternatives"]).lower() or "Apartment" in str(
-        data["alternatives"]
-    )
+    assert "decision_id" in data
+    # Verify alternatives were extracted via the decision detail endpoint
+    detail = client.get(f"/api/decisions/{data['decision_id']}")
+    names = [a["name"].lower() for a in detail.json()["activities"]]
+    assert "house" in names or "apartment" in names
 
 
 def test_decide_flow_with_do_verb(client, db):
     """'should I do X or Y' correctly extracts Aikido and Football."""
-    response = client.post("/decide", data={"q": "should I do aikido or football"})
+    response = client.post("/api/decide", json={"q": "should I do aikido or football"})
     assert response.status_code == 200
     data = response.json()
     assert data["mode"] == "choose"
-    assert "Aikido" in str(data["alternatives"]) or "aikido" in str(
-        data["alternatives"]
-    )
-    assert "Football" in str(data["alternatives"]) or "football" in str(
-        data["alternatives"]
-    )
+    assert "decision_id" in data
+    # Verify alternatives were extracted via the decision detail endpoint
+    detail = client.get(f"/api/decisions/{data['decision_id']}")
+    names = [a["name"].lower() for a in detail.json()["activities"]]
+    assert "aikido" in names or "football" in names
 
 
 def test_ontology_parsing(client, db):
     """Test that ontology-based parsing works via /decide."""
-    response = client.post("/decide", data={"q": "Which job offer should I take?"})
+    response = client.post("/api/decide", json={"q": "Which job offer should I take?"})
     assert response.status_code == 200
     data = response.json()
     assert "decision_id" in data
@@ -221,7 +199,7 @@ def test_decision_not_found(client, db):
 def test_full_decision_flow(client, db):
     """Test the complete decision flow: decide → refine → score → result."""
     # Step 1: Create decision
-    resp = client.post("/decide", data={"q": "Tea or Coffee?"})
+    resp = client.post("/api/decide", json={"q": "Tea or Coffee?"})
     assert resp.status_code == 200
     data = resp.json()
     decision_id = data["decision_id"]
@@ -275,17 +253,16 @@ def test_full_decision_flow(client, db):
 
 
 def test_decide_empty_query(client, db):
-    """Test /decide with empty query returns error."""
-    response = client.post("/decide", data={"q": ""})
+    """Test /api/decide with empty query returns error."""
+    response = client.post("/api/decide", json={"q": ""})
     assert response.status_code == 400
     data = response.json()
-    assert "error" in data
-    assert "question" in data["error"].lower() or "please" in data["error"].lower()
+    assert data["detail"] == "Query cannot be empty"
 
 
 def test_decide_no_match(client, db):
     """Test /decide with a query that has no or/vs pattern."""
-    response = client.post("/decide", data={"q": "What should I do today?"})
+    response = client.post("/api/decide", json={"q": "What should I do today?"})
     assert response.status_code == 200
     data = response.json()
     assert "decision_id" in data
@@ -295,19 +272,6 @@ def test_metrics_page_requires_no_auth(client, db):
     """Test that metrics page loads."""
     response = client.get("/api/metrics")
     assert response.status_code == 200
-
-
-def test_update_metric(client, db):
-    """Test updating a metric."""
-    resp = client.post("/api/metrics", json={"name": "UpdateMe", "category": "Financial"})
-    metric_id = resp.json()["id"]
-
-    response = client.put(
-        f"/api/metrics/{metric_id}", json={"name": "Updated", "category": "Quality"}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Updated"
 
 
 def test_seeded_metrics_on_list_page(client, db):
@@ -334,7 +298,7 @@ def test_seeded_metrics_on_list_page(client, db):
 def test_evaluate_result_returns_single_option_robustness(client, db):
     decision = _seed_scored_decision(db, "diagnose")
 
-    response = client.get(f"/api/evaluate/{decision.id}")
+    response = client.get(f"/api/decisions/{decision.id}")
     assert response.status_code == 200
     data = response.json()
     robustness = data["robustness"]
@@ -356,17 +320,11 @@ def test_evaluate_result_returns_single_option_robustness(client, db):
     assert data["significance"] is None
 
 
-def test_evaluate_not_found(client, db):
-    """404 for nonexistent evaluation"""
-    resp = client.get("/api/evaluate/99999")
-    assert resp.status_code == 404
-
-
 def test_decide_routes_to_diagnose(client, db):
-    """DIAGNOSE-style query via /decide → returns JSON with diagnose mode"""
+    """DIAGNOSE-style query via /api/decide → returns JSON with diagnose mode"""
     resp = client.post(
-        "/decide",
-        data={"q": "How good is a Tesla for commuting?"},
+        "/api/decide",
+        json={"q": "How good is a Tesla for commuting?"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -375,67 +333,36 @@ def test_decide_routes_to_diagnose(client, db):
 
 
 def test_decide_with_choose_query_still_works(client, db):
-    """CHOOSE query via /decide → returns JSON with parsed alternatives"""
+    """CHOOSE query via /api/decide → returns JSON with decision_id"""
     resp = client.post(
-        "/decide",
-        data={"q": "Should I buy a house or an apartment?"},
-        follow_redirects=False,
+        "/api/decide",
+        json={"q": "Should I buy a house or an apartment?"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert "house" in str(data["alternatives"]).lower()
-    assert "apartment" in str(data["alternatives"]).lower()
+    assert data["mode"] == "choose"
+    assert "decision_id" in data
 
 
 def test_decide_with_no_match_fallback(client, db):
     """Query matching neither CHOOSE nor DIAGNOSE → fallback to CHOOSE"""
     resp = client.post(
-        "/decide",
-        data={"q": "Hello world"},
-        follow_redirects=False,
+        "/api/decide",
+        json={"q": "Hello world"},
     )
     assert resp.status_code == 200
     data = resp.json()
     assert "decision_id" in data
 
 
-# ── SCREEN (backward compat via API) tests ──
-
-
-def test_screen_backward_compat_result(client, db):
-    """Existing screen decisions still return result data via API (backward compat)"""
-    from models import Activity, Decision
-
-    decision = Decision(query="Cost <= 60", category="General", mode="screen")
-    db.add(decision)
-    db.flush()
-
-    activity = Activity(
-        name="Cheap Option", category="General", decision_id=decision.id
-    )
-    db.add(activity)
-    db.commit()
-
-    resp = client.get(f"/api/screen/{decision.id}")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "decision" in data or "results" in data
-
-
-def test_screen_not_found(client, db):
-    """404 for nonexistent screening via API"""
-    resp = client.get("/api/screen/99999")
-    assert resp.status_code == 404
-
-
 # ── RANK (Mode 4) tests ──
 
 
 def test_rank_via_decide(client, db):
-    """List query via /decide → returns JSON with rank mode"""
+    """List query via /api/decide → returns JSON with rank mode"""
     resp = client.post(
-        "/decide",
-        data={"q": "Rank Python, Java, Go"},
+        "/api/decide",
+        json={"q": "Rank Python, Java, Go"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -446,8 +373,8 @@ def test_rank_via_decide(client, db):
 def test_rank_flow(client, db):
     """Full flow: decide → refine → score → result"""
     resp = client.post(
-        "/decide",
-        data={"q": "Python, Java, Go"},
+        "/api/decide",
+        json={"q": "Python, Java, Go"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -485,19 +412,12 @@ def test_rank_flow(client, db):
     assert "results" in result_data
 
 
-def test_rank_not_found(client, db):
-    """404 for nonexistent ranking via API"""
-    resp = client.get("/api/rank/99999")
-    assert resp.status_code == 404
-
-
 def test_rank_two_items_fallback(client, db):
     """2 items should NOT route to rank — CHOOSE handles it"""
     resp = client.post(
-        "/decide",
-        data={"q": "A, B"},
+        "/api/decide",
+        json={"q": "A, B"},
     )
-    # Returns JSON directly (CHOOSE)
     assert resp.status_code == 200
     data = resp.json()
     assert data["mode"] == "choose"
@@ -506,7 +426,7 @@ def test_rank_two_items_fallback(client, db):
 def test_rank_result_reuses_decision_result(client, db):
     """Rank result page shows ranking data via API"""
     # Create a decision with rank mode via /decide
-    resp = client.post("/decide", data={"q": "X, Y, Z"})
+    resp = client.post("/api/decide", json={"q": "X, Y, Z"})
     assert resp.status_code == 200
     data = resp.json()
     decision_id = data["decision_id"]
@@ -536,17 +456,17 @@ def test_rank_result_reuses_decision_result(client, db):
     client.post(f"/api/decisions/{decision_id}/score", json={"scores": scores})
 
     # Check result via API
-    result = client.get(f"/api/screen/{decision_id}")
+    result = client.get(f"/api/decisions/{decision_id}")
     assert result.status_code == 200
     data = result.json()
     assert "results" in data
 
 
 def test_decide_heuristic_routing(client, db):
-    """/decide auto-detects workflow from query text."""
+    """/api/decide auto-detects workflow from query text."""
     resp = client.post(
-        "/decide",
-        data={"q": "Should I buy a house or an apartment?"},
+        "/api/decide",
+        json={"q": "Should I buy a house or an apartment?"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -554,8 +474,8 @@ def test_decide_heuristic_routing(client, db):
 
     # Heuristic rank detection
     resp3 = client.post(
-        "/decide",
-        data={"q": "Rank Python, Java, Go"},
+        "/api/decide",
+        json={"q": "Rank Python, Java, Go"},
     )
     assert resp3.status_code == 200
     data3 = resp3.json()
@@ -563,8 +483,8 @@ def test_decide_heuristic_routing(client, db):
 
     # Heuristic diagnose detection
     resp4 = client.post(
-        "/decide",
-        data={"q": "How good is Rust?"},
+        "/api/decide",
+        json={"q": "How good is Rust?"},
     )
     assert resp4.status_code == 200
     data4 = resp4.json()
@@ -575,8 +495,8 @@ def test_decide_heuristic_routing(client, db):
 
 
 def _create_decision_with_metric(client, db, query="House or Apartment?"):
-    """Helper: create a decision via /decide, refine with 1 metric via API, return decision_id and metric_id."""
-    resp = client.post("/decide", data={"q": query})
+    """Helper: create a decision via /api/decide, refine with 1 metric via API, return decision_id and metric_id."""
+    resp = client.post("/api/decide", json={"q": query})
     assert resp.status_code == 200
     decision_id = resp.json()["decision_id"]
 

@@ -1,25 +1,21 @@
 from contextlib import asynccontextmanager
 import os
 
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
 
-from database import Base, engine, get_db
 from routers.api import router as api_router
-from services.parser import parse_question
-from services.decision_limits import enforce_decision_size
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: create tables
+    from database import Base, engine, SessionLocal
+
     Base.metadata.create_all(bind=engine)
     # Seed universal metrics if they don't exist
     from services.ontology import UNIVERSAL_DIMENSIONS
     from models import Metric
-    from database import SessionLocal
 
     db = SessionLocal()
     try:
@@ -74,168 +70,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-
-
-@app.get("/")
-def index(request: Request, db: Session = Depends(get_db)):
-    from models import Decision
-
-    decisions = db.query(Decision).order_by(Decision.created_at.desc()).all()
-    result = []
-    for d in decisions:
-        mode = d.mode if hasattr(d, "mode") and d.mode else "choose"
-        result_url = {
-            "diagnose": f"/evaluate/{d.id}/result",
-            "screen": f"/screen/{d.id}/result",
-            "rank": f"/rank/{d.id}/result",
-        }.get(mode, f"/decisions/{d.id}/result")
-        result.append(
-            {
-                "id": d.id,
-                "query": d.query,
-                "mode": mode,
-                "category": d.category,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-                "result_url": result_url,
-            }
-        )
-    return {"decisions": result}
-
-
-@app.post("/decide")
-async def decide(request: Request, db: Session = Depends(get_db)):
-    from models import Activity, Decision, DecisionWeight, Metric
-    from services.ontology import UNIVERSAL_METRICS
-
-    form = await request.form()
-    query = form.get("q", "").strip()
-
-    # ── Helper: seed default weights for a decision (decision-level) ──
-    def _seed_default_weights(decision_id: int) -> None:
-        # Idempotent: skip if DecisionWeight rows already exist
-        existing = (
-            db.query(DecisionWeight)
-            .filter(DecisionWeight.decision_id == decision_id)
-            .first()
-        )
-        if existing:
-            return
-        all_metrics = db.query(Metric).all()
-        metric_map = {m.name: m for m in all_metrics}
-        for m in UNIVERSAL_METRICS:
-            metric = metric_map.get(m["name"])
-            if metric:
-                db.add(
-                    DecisionWeight(
-                        decision_id=decision_id,
-                        metric_id=metric.id,
-                        weight=m["default_weight"],
-                    )
-                )
-
-    if not query:
-        return JSONResponse(
-            {"error": "Please enter a question."},
-            status_code=400,
-        )
-
-    # ── Heuristic routing (auto-detect mode from query) ──
-    parsed = parse_question(query)
-    alternatives = parsed["alternatives"]
-    criteria_list = parsed["criteria"]
-    category = parsed["category"]
-    is_parsed = parsed["parsed"]
-
-    # If CHOOSE didn't find alternatives, try DIAGNOSE parsing
-    if not is_parsed:
-        from services.parser import extract_subject
-
-        diag = extract_subject(query)
-        if diag["parsed"]:
-            # Route as DIAGNOSE
-            decision = Decision(query=query, category="General", mode="diagnose")
-            db.add(decision)
-            db.flush()
-
-            subject = diag["subject"]
-            activity = Activity(
-                name=subject, category="General", decision_id=decision.id
-            )
-            db.add(activity)
-            db.flush()
-            _seed_default_weights(decision.id)
-            db.commit()
-            return {
-                "decision_id": decision.id,
-                "mode": "diagnose",
-                "redirect_url": f"/decisions/{decision.id}/review",
-            }
-
-        # If DIAGNOSE didn't match, try RANK
-        from services.parser import extract_list
-
-        list_parsed = extract_list(query)
-        if list_parsed["parsed"]:
-            enforce_decision_size(
-                len(list_parsed["alternatives"]), len(UNIVERSAL_METRICS)
-            )
-            # Route as RANK
-            decision = Decision(query=query, category="General", mode="rank")
-            db.add(decision)
-            db.flush()
-
-            for name in list_parsed["alternatives"]:
-                activity = Activity(
-                    name=name, category="General", decision_id=decision.id
-                )
-                db.add(activity)
-                db.flush()
-            _seed_default_weights(decision.id)
-
-            db.commit()
-            return {
-                "decision_id": decision.id,
-                "mode": "rank",
-                "redirect_url": f"/decisions/{decision.id}/review",
-            }
-
-    # Continue as CHOOSE
-    enforce_decision_size(len(alternatives), len(UNIVERSAL_METRICS))
-    decision = Decision(query=query, category=category)
-    db.add(decision)
-    db.flush()
-
-    for alt_name in alternatives:
-        activity = Activity(
-            name=alt_name,
-            category=category,
-            decision_id=decision.id,
-        )
-        db.add(activity)
-        db.flush()
-    _seed_default_weights(decision.id)
-
-    db.commit()
-
-    all_metrics = db.query(Metric).all()
-    metric_map = {m.name: m for m in all_metrics}
-    criteria_with_ids = []
-    for c in criteria_list:
-        metric = metric_map.get(c["name"])
-        criteria_with_ids.append(
-            {
-                **c,
-                "id": metric.id if metric else None,
-            }
-        )
-
-    return {
-        "decision_id": decision.id,
-        "mode": decision.mode if decision.mode else "choose",
-        "query": decision.query,
-        "category": category,
-        "alternatives": alternatives,
-        "criteria": criteria_with_ids,
-        "parsed": is_parsed,
-        "redirect_url": f"/decisions/{decision.id}/review",
-    }

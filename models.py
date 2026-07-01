@@ -72,11 +72,7 @@ class Metric(Base):
     name = Column(String, index=True, nullable=False)
     category = Column(String, nullable=False)
     description = Column(String, nullable=True)
-    unit = Column(String, nullable=True)
     higher_is_better = Column(Boolean, default=True, nullable=False)
-    parent_id = Column(Integer, ForeignKey("metrics.id"), nullable=True)
-
-    parent = relationship("Metric", remote_side="Metric.id", backref="children")
 
     __table_args__ = (UniqueConstraint("name", name="uq_metric_name"),)
 

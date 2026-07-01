@@ -218,7 +218,6 @@ client-side React SPA that communicates exclusively with these API endpoints.
 ```
 ├── main.py                       # FastAPI app, CORS, router mounts
 ├── models.py                     # SQLAlchemy models
-├── schemas.py                    # Pydantic schemas
 ├── database.py                   # Engine, session, get_db
 ├── routers/
 │   └── api.py                    # JSON API endpoints (/api/*)
@@ -227,6 +226,7 @@ client-side React SPA that communicates exclusively with these API endpoints.
 │   ├── robustness.py             # Monte Carlo sensitivity analysis
 │   ├── ontology.py               # Pre-seeded universal criteria dimensions
 │   ├── parser.py                 # Free-text question parser
+│   ├── export.py                 # Markdown decision brief export
 │   └── decision_limits.py        # Workload guards for robustness
 ├── frontend/                     # React SPA
 │   ├── src/

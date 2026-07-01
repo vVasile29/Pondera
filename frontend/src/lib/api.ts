@@ -3,9 +3,6 @@ import type {
   DecisionDetail,
   DecisionListResponse,
   DeleteResponse,
-  MetricCRUDResponse,
-  MetricCreatePayload,
-  MetricUpdatePayload,
   MetricsResponse,
   RefinePayload,
   RefineResponse,
@@ -86,50 +83,9 @@ export const api = {
     });
   },
 
-  /** Evaluate endpoint — includes dimension scores and gap analysis. */
-  getEvaluate(id: number): Promise<DecisionDetail> {
-    return request(`/evaluate/${id}`);
-  },
-
-  /** Rank endpoint. */
-  getRank(id: number): Promise<DecisionDetail> {
-    return request(`/rank/${id}`);
-  },
-
-  /** Screen endpoint — always computes filter result. */
-  getScreen(id: number): Promise<DecisionDetail> {
-    return request(`/screen/${id}`);
-  },
-
   /** List all metrics grouped by dimension. */
   getMetrics(): Promise<MetricsResponse> {
     return request("/metrics");
-  },
-
-  /** Create a new metric. */
-  createMetric(data: MetricCreatePayload): Promise<MetricCRUDResponse> {
-    return request("/metrics", {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Update an existing metric. */
-  updateMetric(
-    id: number,
-    data: MetricUpdatePayload,
-  ): Promise<MetricCRUDResponse> {
-    return request(`/metrics/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
-  },
-
-  /** Delete a metric. */
-  deleteMetric(id: number): Promise<{ status: string }> {
-    return request(`/metrics/${id}`, {
-      method: "DELETE",
-    });
   },
 
   /** Delete a decision and all associated data. */

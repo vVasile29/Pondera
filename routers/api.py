@@ -1,7 +1,6 @@
-"""Backend JSON API layer for Optium.
+"""Optium JSON API layer.
 
-Provides RESTful JSON endpoints mirroring the existing HTML form-based flow.
-Allows headless access for frontend frameworks (e.g., Vue, React via localhost:5173).
+Deterministic MCDA decision engine. All endpoints under /api/*.
 """
 
 import json
@@ -12,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Activity, DecisionWeight, AlternativeScore, Decision, Metric
-from schemas import MetricCreate, MetricUpdate
 from services.decision_limits import enforce_decision_size
 from services.export import generate_markdown_brief, get_decision_export_data
 from services.robustness import build_decision_robustness
@@ -27,23 +25,6 @@ router = APIRouter(prefix="/api", tags=["api"])
 
 
 # ── Shared helpers ──
-
-
-def _decision_result_url(decision: Decision) -> str:
-    mode = decision.mode if hasattr(decision, "mode") and decision.mode else "choose"
-    return {
-        "diagnose": f"/evaluate/{decision.id}/result",
-        "screen": f"/screen/{decision.id}/result",
-        "rank": f"/rank/{decision.id}/result",
-    }.get(mode, f"/decisions/{decision.id}/result")
-
-
-def _review_url(decision: Decision) -> str:
-    mode = decision.mode if hasattr(decision, "mode") and decision.mode else "choose"
-    return {
-        "diagnose": f"/evaluate/{decision.id}/review",
-        "rank": f"/rank/{decision.id}/review",
-    }.get(mode, f"/decisions/{decision.id}/review")
 
 
 def _robustness_for_results(
@@ -62,17 +43,8 @@ def _parse_thresholds(decision: Decision) -> list:
         return []
 
 
-def _build_decision_detail(
-    decision_id: int,
-    db: Session,
-    *,
-    force_dimension_scores: bool = False,
-    force_filter: bool = False,
-) -> dict:
-    """Assemble the full decision detail JSON.
-
-    Used by GET /api/decisions/{id}, /api/evaluate/{id}, /api/rank/{id}, /api/screen/{id}.
-    """
+def _build_decision_detail(decision_id: int, db: Session) -> dict:
+    """Assemble the full decision detail JSON."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
     if not decision:
         raise HTTPException(status_code=404, detail="Decision not found")
@@ -175,7 +147,6 @@ def _build_decision_detail(
             "metric_desc": m.description or "",
             "higher_is_better": m.higher_is_better,
             "weight": weight,
-
             "scores": {},
         }
         for act in activities:
@@ -191,9 +162,9 @@ def _build_decision_detail(
         rows.append(row)
     result["rows"] = rows
 
-    # Dimension scores + gap analysis (for diagnose mode or evaluate endpoint)
+    # Dimension scores + gap analysis (for diagnose mode)
     mode = decision.mode if decision.mode else "choose"
-    if force_dimension_scores or mode == "diagnose":
+    if mode == "diagnose":
         dim_scores = compute_dimension_scores(decision_id, db)
         result["dimension_scores"] = dim_scores
         result["gap_analysis"] = gap_analysis(dim_scores) if dim_scores else None
@@ -203,7 +174,7 @@ def _build_decision_detail(
 
     # Threshold filtering
     thresholds = _parse_thresholds(decision)
-    if thresholds or force_filter:
+    if thresholds:
         filter_result = filter_by_thresholds(decision_id, db)
         result["filter_result"] = filter_result
         result["robustness"] = _robustness_for_results(
@@ -239,7 +210,7 @@ def _build_decision_detail(
 
 @router.post("/decide")
 def decide(body: dict, db: Session = Depends(get_db)):
-    """Parse a free-text question, create decision + activities, return JSON redirect."""
+    """Parse a free-text question, create decision + activities, return decision_id."""
     from services.ontology import UNIVERSAL_METRICS
     from services.parser import extract_list, extract_subject, parse_question
 
@@ -250,7 +221,6 @@ def decide(body: dict, db: Session = Depends(get_db)):
 
     # ── Helper: seed default weights for a decision (decision-level) ──
     def _seed_default_weights(decision_id: int) -> None:
-        # Idempotent: skip if DecisionWeight rows already exist
         existing = (
             db.query(DecisionWeight)
             .filter(DecisionWeight.decision_id == decision_id)
@@ -277,7 +247,6 @@ def decide(body: dict, db: Session = Depends(get_db)):
     category = parsed["category"]
     is_parsed = parsed["parsed"]
 
-    # If CHOOSE didn't find alternatives, try DIAGNOSE parsing
     if not is_parsed:
         diag = extract_subject(query)
         if diag["parsed"]:
@@ -297,10 +266,9 @@ def decide(body: dict, db: Session = Depends(get_db)):
             return {
                 "decision_id": decision.id,
                 "mode": "diagnose",
-                "redirect_url": f"/evaluate/{decision.id}/review",
+                "next": "review",
             }
 
-        # If DIAGNOSE didn't match, try RANK
         list_parsed = extract_list(query)
         if list_parsed["parsed"]:
             enforce_decision_size(
@@ -322,10 +290,9 @@ def decide(body: dict, db: Session = Depends(get_db)):
             return {
                 "decision_id": decision.id,
                 "mode": "rank",
-                "redirect_url": f"/rank/{decision.id}/review",
+                "next": "review",
             }
 
-    # Continue as CHOOSE
     enforce_decision_size(len(alternatives), len(UNIVERSAL_METRICS))
     decision = Decision(query=query, category=category)
     db.add(decision)
@@ -346,7 +313,7 @@ def decide(body: dict, db: Session = Depends(get_db)):
     return {
         "decision_id": decision.id,
         "mode": decision.mode if decision.mode else "choose",
-        "redirect_url": f"/decisions/{decision.id}/review",
+        "next": "review",
     }
 
 
@@ -356,7 +323,7 @@ def list_decisions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
-    """List decisions ordered by created_at desc with mode-aware result_url."""
+    """List decisions ordered by created_at desc."""
     decisions = (
         db.query(Decision)
         .order_by(Decision.created_at.desc())
@@ -372,7 +339,6 @@ def list_decisions(
                 "mode": d.mode if d.mode else "choose",
                 "category": d.category,
                 "created_at": d.created_at.isoformat() if d.created_at else None,
-                "result_url": _decision_result_url(d),
             }
             for d in decisions
         ]
@@ -381,7 +347,7 @@ def list_decisions(
 
 @router.get("/decisions/{decision_id}")
 def get_decision(decision_id: int, db: Session = Depends(get_db)):
-    """Return complete decision state."""
+    """Return complete decision state including results, series, robustness."""
     return _build_decision_detail(decision_id, db)
 
 
@@ -407,7 +373,6 @@ def refine_decision(
         raise HTTPException(status_code=422, detail="At least one metric is required")
     enforce_decision_size(len(alternatives), len(metrics_input))
 
-    # Delete old DecisionWeight rows, activities and their scores
     db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).delete()
     for activity in decision.activities:
         db.query(AlternativeScore).filter(
@@ -416,7 +381,6 @@ def refine_decision(
         db.delete(activity)
     db.flush()
 
-    # Create activities and decision-level weights
     new_activities = []
     for alt_name in alternatives:
         activity = Activity(
@@ -438,7 +402,6 @@ def refine_decision(
 
     db.commit()
 
-    # Build response with DB IDs
     metrics_db = (
         db.query(Metric)
         .filter(Metric.id.in_([m["metric_id"] for m in metrics_input]))
@@ -481,7 +444,6 @@ def score_decision(
     if not scores_input:
         raise HTTPException(status_code=422, detail="At least one score is required")
 
-    # Delete old scores
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
     for activity in activities:
         db.query(AlternativeScore).filter(
@@ -489,7 +451,6 @@ def score_decision(
         ).delete()
     db.flush()
 
-    # Insert new scores
     for s in scores_input:
         alt_score = AlternativeScore(
             activity_id=s["activity_id"],
@@ -499,7 +460,6 @@ def score_decision(
         db.add(alt_score)
     db.commit()
 
-    # Reload activities and metrics for the result
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
     metric_ids = set()
     for dw in (
@@ -512,11 +472,9 @@ def score_decision(
         else []
     )
 
-    # Compute fit scores
     results = compute_alternative_fit_scores(decision_id, db)
     metric_names = [m.name for m in metrics]
 
-    # Build series
     series = []
     for act in activities:
         scores_map = {}
@@ -592,10 +550,8 @@ def apply_thresholds(
     decision.thresholds = json.dumps(validated) if validated else None
     db.commit()
 
-    # Compute filter result
     filter_result = filter_by_thresholds(decision_id, db) if validated else None
 
-    # Build threshold_criteria
     metric_ids = set()
     for dw in (
         db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()
@@ -640,24 +596,6 @@ def clear_thresholds(decision_id: int, db: Session = Depends(get_db)):
     return {"status": "cleared"}
 
 
-@router.get("/evaluate/{decision_id}")
-def get_evaluate(decision_id: int, db: Session = Depends(get_db)):
-    """Same as GET /api/decisions/{id} but always includes dimension_scores and gap_analysis."""
-    return _build_decision_detail(decision_id, db, force_dimension_scores=True)
-
-
-@router.get("/rank/{decision_id}")
-def get_rank(decision_id: int, db: Session = Depends(get_db)):
-    """Same as GET /api/decisions/{id}."""
-    return _build_decision_detail(decision_id, db)
-
-
-@router.get("/screen/{decision_id}")
-def get_screen(decision_id: int, db: Session = Depends(get_db)):
-    """Same as GET /api/decisions/{id} but always computes filter_result."""
-    return _build_decision_detail(decision_id, db, force_filter=True)
-
-
 @router.get("/decisions/{decision_id}/export-markdown")
 def export_decision_markdown(decision_id: int, db: Session = Depends(get_db)):
     """Export a decision brief as a downloadable Markdown file."""
@@ -684,75 +622,17 @@ def list_metrics(db: Session = Depends(get_db)):
         category = m.category or "General"
         if category not in grouped:
             grouped[category] = []
-        entry = {
-            "id": m.id,
-            "name": m.name,
-            "category": m.category,
-            "description": m.description or "",
-            "unit": m.unit or "",
-            "higher_is_better": m.higher_is_better,
-        }
-        # Children (sub-metrics)
-        children = []
-        if m.children:
-            for child in m.children:
-                children.append(
-                    {
-                        "id": child.id,
-                        "name": child.name,
-                        "category": child.category,
-                        "description": child.description or "",
-                        "unit": child.unit or "",
-                        "higher_is_better": child.higher_is_better,
-                    }
-                )
-        if children:
-            entry["children"] = children
-
-        grouped[category].append(entry)
+        grouped[category].append(
+            {
+                "id": m.id,
+                "name": m.name,
+                "category": m.category,
+                "description": m.description or "",
+                "higher_is_better": m.higher_is_better,
+            }
+        )
 
     return {"grouped_metrics": grouped}
-
-
-@router.post("/metrics")
-def create_metric(data: MetricCreate, db: Session = Depends(get_db)):
-    """Create a new metric."""
-    existing = db.query(Metric).filter(Metric.name == data.name).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Metric already exists")
-    metric = Metric(**data.model_dump())
-    db.add(metric)
-    db.commit()
-    db.refresh(metric)
-    return {"id": metric.id, "name": metric.name, "category": metric.category}
-
-
-@router.put("/metrics/{metric_id}")
-def update_metric(metric_id: int, data: MetricUpdate, db: Session = Depends(get_db)):
-    """Update an existing metric."""
-    metric = db.query(Metric).filter(Metric.id == metric_id).first()
-    if not metric:
-        raise HTTPException(status_code=404, detail="Metric not found")
-    update_data = data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(metric, key, value)
-    db.commit()
-    return {"id": metric.id, "name": metric.name}
-
-
-@router.delete("/metrics/{metric_id}")
-def delete_metric(metric_id: int, db: Session = Depends(get_db)):
-    """Delete a metric and its related data."""
-    metric = db.query(Metric).filter(Metric.id == metric_id).first()
-    if not metric:
-        raise HTTPException(status_code=404, detail="Metric not found")
-    # Delete related decision weights
-    db.query(DecisionWeight).filter(DecisionWeight.metric_id == metric_id).delete()
-    # Delete sub-metrics first
-    db.query(Metric).filter(Metric.parent_id == metric_id).delete()
-    db.delete(metric)
-    db.commit()
-    return {"status": "deleted"}
 
 
 @router.post("/decisions/{decision_id}/delete")
@@ -762,14 +642,13 @@ def delete_decision(decision_id: int, db: Session = Depends(get_db)):
     if not decision:
         raise HTTPException(status_code=404, detail="Decision not found")
 
-    # AlternativeScore is not in the ORM cascade chain, delete manually
     activity_ids = [a.id for a in decision.activities]
     if activity_ids:
         db.query(AlternativeScore).filter(
             AlternativeScore.activity_id.in_(activity_ids)
         ).delete()
 
-    db.delete(decision)  # cascades to DecisionWeight via ORM
+    db.delete(decision)
     db.commit()
 
     return {"status": "deleted"}

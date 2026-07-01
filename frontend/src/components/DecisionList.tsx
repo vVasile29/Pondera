@@ -11,7 +11,6 @@ const MODE_COLORS: Record<string, string> = {
   choose: "bg-blue-500",
   diagnose: "bg-green-500",
   rank: "bg-amber-500",
-  screen: "bg-purple-500",
 };
 
 export default function DecisionList() {
@@ -37,13 +36,7 @@ export default function DecisionList() {
     }
   };
 
-  const modeUrl = (d: Decision) => {
-    const m = d.mode || "choose";
-    if (m === "diagnose") return `/evaluate/${d.id}/result`;
-    if (m === "screen") return `/screen/${d.id}/result`;
-    if (m === "rank") return `/rank/${d.id}/result`;
-    return `/decisions/${d.id}/result`;
-  };
+  const modeUrl = (d: Decision) => `/decisions/${d.id}/result`;
 
   if (loading) return <div className="p-8 text-center">Loading...</div>;
 
