@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, ArrowRight } from "lucide-react";
 
-/** Map a benefit score (0–100) to a Tailwind text color class. */
+/** Map a fit score (0–100) to a Tailwind text color class. */
 function scoreColor(value: number): string {
   const pct = value / 100;
   if (pct >= 0.7) return "text-green-600 dark:text-green-400";
@@ -113,7 +113,7 @@ export default function Scoring() {
         <h1 className="text-3xl font-bold">Score Your Alternatives</h1>
         <p className="text-muted-foreground mt-1">{data.decision.query}</p>
         <p className="text-sm text-muted-foreground mt-2">
-          Every slider is a 0–100 benefit score: higher is always better.
+          Every slider is a 0–100 fit score. Higher always means better fit.
         </p>
       </div>
 
@@ -154,7 +154,11 @@ export default function Scoring() {
                 <span className="text-xs text-muted-foreground truncate">
                   {metric.description}
                 </span>
-                <span className="text-xs text-muted-foreground">Higher is better</span>
+                {metric.anchors ? (
+                  <span className="text-xs text-muted-foreground">
+                    0: {metric.anchors.low} · 50: {metric.anchors.mid} · 100: {metric.anchors.high}
+                  </span>
+                ) : null}
               </div>
 
               {/* Per-alternative slider cells */}
@@ -230,11 +234,9 @@ export default function Scoring() {
                       step={1}
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground">
-                      <span>Poor</span>
-                      <span>Below Avg</span>
-                      <span>Average</span>
-                      <span>Good</span>
-                      <span>Excellent</span>
+                      <span>{metric.anchors?.low ?? "Poor fit"}</span>
+                      <span>{metric.anchors?.mid ?? "Partial fit"}</span>
+                      <span>{metric.anchors?.high ?? "Excellent fit"}</span>
                     </div>
                   </div>
                 );

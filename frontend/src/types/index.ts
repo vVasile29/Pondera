@@ -15,9 +15,17 @@ export interface Activity {
 
 export interface Metric {
   id: number;
+  stable_id?: string | null;
   name: string;
   category: string;
+  category_id?: string | null;
   description: string;
+  question?: string;
+  anchors?: {
+    low: string;
+    mid: string;
+    high: string;
+  } | null;
 }
 
 // ── Scoring ──
@@ -45,6 +53,12 @@ export interface ScoreRow {
   metric_id: number;
   metric_name: string;
   metric_desc: string;
+  metric_question?: string;
+  metric_anchors?: {
+    low: string;
+    mid: string;
+    high: string;
+  } | null;
   weight: number;
   scores: Record<number, number>;
 }
@@ -209,9 +223,17 @@ export interface DecisionDetail {
 
 export interface GroupedMetric {
   id: number;
+  stable_id?: string | null;
   name: string;
   category: string;
+  category_id?: string | null;
   description: string;
+  question?: string;
+  anchors?: {
+    low: string;
+    mid: string;
+    high: string;
+  } | null;
 }
 
 export interface MetricsResponse {

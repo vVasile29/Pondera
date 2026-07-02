@@ -24,6 +24,7 @@ from services.scoring import (
     sanitize_persisted_ko_criteria,
     sanitize_persisted_thresholds,
 )
+from services.ontology import RESERVED_LEGACY_METRIC_NAMES, serialize_metric_metadata
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -73,6 +74,14 @@ def _validate_score_value(value, label: str) -> float:
     return value_float
 
 
+def _validate_metric_name_not_reserved(name: str) -> None:
+    if name in RESERVED_LEGACY_METRIC_NAMES:
+        raise HTTPException(
+            status_code=422,
+            detail="Metric name is reserved for legacy seed migration",
+        )
+
+
 def _build_decision_detail(decision_id: int, db: Session) -> dict:
     """Assemble the full decision detail JSON."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
@@ -102,15 +111,7 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
             else None,
         },
         "activities": [{"id": a.id, "name": a.name} for a in activities],
-        "metrics": [
-            {
-                "id": m.id,
-                "name": m.name,
-                "category": m.category,
-                "description": m.description or "",
-            }
-            for m in metrics
-        ],
+        "metrics": [serialize_metric_metadata(m) for m in metrics],
         "results": [],
         "series": [],
         "metric_names": [],
@@ -173,6 +174,8 @@ def _build_decision_detail(decision_id: int, db: Session) -> dict:
             "metric_id": m.id,
             "metric_name": m.name,
             "metric_desc": m.description or "",
+            "metric_question": serialize_metric_metadata(m)["question"],
+            "metric_anchors": serialize_metric_metadata(m)["anchors"],
             "weight": weight,
             "scores": {},
         }
@@ -555,8 +558,7 @@ def refine_decision(
         if m:
             criteria_result.append(
                 {
-                    "id": m.id,
-                    "name": m.name,
+                    **serialize_metric_metadata(m),
                     "weight": mitem.get("weight", 50),
                 }
             )
@@ -834,14 +836,7 @@ def list_metrics(db: Session = Depends(get_db)):
         category = m.category or "General"
         if category not in grouped:
             grouped[category] = []
-        grouped[category].append(
-            {
-                "id": m.id,
-                "name": m.name,
-                "category": m.category,
-                "description": m.description or "",
-            }
-        )
+        grouped[category].append(serialize_metric_metadata(m))
 
     return {"grouped_metrics": grouped}
 
@@ -861,6 +856,7 @@ def create_metric(body: dict, db: Session = Depends(get_db)):
 
     name = name.strip()
     category = category.strip()
+    _validate_metric_name_not_reserved(name)
 
     existing = db.query(Metric).filter(Metric.name == name).first()
     if existing:
@@ -870,7 +866,7 @@ def create_metric(body: dict, db: Session = Depends(get_db)):
     db.add(metric)
     db.commit()
     db.refresh(metric)
-    return {"id": metric.id, "name": metric.name, "category": metric.category, "description": metric.description or ""}
+    return serialize_metric_metadata(metric)
 
 
 @router.put("/metrics/{metric_id}")
@@ -887,6 +883,7 @@ def update_metric(metric_id: int, body: dict, db: Session = Depends(get_db)):
         if not isinstance(name, str) or not name.strip():
             raise HTTPException(status_code=422, detail="Metric name is required")
         name = name.strip()
+        _validate_metric_name_not_reserved(name)
         if name != metric.name:
             existing = db.query(Metric).filter(Metric.name == name).first()
             if existing:
@@ -905,7 +902,7 @@ def update_metric(metric_id: int, body: dict, db: Session = Depends(get_db)):
 
     db.commit()
     db.refresh(metric)
-    return {"id": metric.id, "name": metric.name, "category": metric.category, "description": metric.description or ""}
+    return serialize_metric_metadata(metric)
 
 
 @router.delete("/metrics/{metric_id}")

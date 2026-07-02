@@ -13,12 +13,12 @@ import { Loader2, ArrowRight, Plus, X } from "lucide-react";
 import type { Metric } from "@/types";
 
 const DIMENSION_ORDER = [
-  "Financial",
-  "Quality",
-  "Time",
-  "Risk",
-  "Experience",
-  "Convenience",
+  "Resource Fit",
+  "Objective Fit",
+  "Time Fit",
+  "Assurance Fit",
+  "People Fit",
+  "Practical Fit",
 ];
 
 export default function Review() {
@@ -291,7 +291,7 @@ export default function Review() {
         </CardHeader>
         <CardContent className="space-y-6">
           <p className="text-sm text-muted-foreground">
-            Adjust weights to set priority. Click <span className="font-semibold">KO</span> to set a minimum score threshold — alternatives scoring below are eliminated from results.
+            Every slider is a 0–100 fit score. Higher always means better fit. Adjust weights to set priority. Click <span className="font-semibold">KO</span> to set a minimum fit threshold — alternatives scoring below are eliminated from results.
           </p>
           {groupedMetrics.map(({ dimension, metrics }) => (
             <div key={dimension}>
@@ -316,7 +316,7 @@ export default function Review() {
                           {metric.name}
                         </Label>
                         <span className="text-xs text-muted-foreground leading-tight mt-0.5">
-                          {metric.description}
+                          {metric.question ?? metric.description}
                         </span>
                       </div>
                     </div>

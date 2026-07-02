@@ -257,11 +257,11 @@ def compute_alternative_fit_scores(decision_id: int, db: Session) -> list[dict]:
 def compute_dimension_scores(decision_id: int, db: Session) -> list[dict]:
     """Group metric scores by dimension and compute weighted averages.
 
-    Groups metrics by their category (dimension name like 'Financial', 'Quality', etc.)
+    Groups metrics by their fit category.
     For each dimension, computes the weighted average of its metrics' scores.
 
     Returns: [
-        {"dimension": "Financial", "score": 45.2, "metrics": [...], "metric_count": 2},
+        {"dimension": "Resource Fit", "score": 45.2, "metrics": [...], "metric_count": 2},
         ...
     ]
     """
@@ -494,7 +494,7 @@ def gap_analysis(dimension_scores: list[dict]) -> dict:
 
     Returns: {
         "strengths": [{"dimension": "Quality", "score": 85, "gap": 20}],
-        "weaknesses": [{"dimension": "Cost", "score": 35, "gap": -30}],
+        "weaknesses": [{"dimension": "Resource Fit", "score": 35, "gap": -30}],
         "overall_avg": 65.0,
         "balanced": False  # True if all gaps < 5
     }

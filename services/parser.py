@@ -143,7 +143,7 @@ def parse_question(query: str) -> dict:
 
     Returns: {
         "alternatives": ["House", "Apartment"],
-        "criteria": [{"name": "Cost", ...}, ...],
+        "criteria": [{"name": "Affordability", ...}, ...],
         "category": "General",
         "parsed": True
     }

@@ -204,12 +204,12 @@ export default function Landing() {
             Optium is grounded in Multi-Criteria Decision Analysis principles,
             including weighted-sum scoring and Value-Focused
             Thinking&ndash;style attention to explicit values. It turns
-            preferences into inspectable criteria, weights, and 0–100 scores
+            preferences into inspectable criteria, weights, and 0–100 fit scores
             rather than presenting a black-box answer.
           </p>
           <p className="text-muted-foreground">
-            Its six global value dimensions&mdash;Financial, Quality, Time,
-            Risk, Experience, and Convenience&mdash;are inspired by broad MCDA
+            Its six global fit dimensions&mdash;Resource Fit, Objective Fit, Time Fit,
+            Assurance Fit, People Fit, and Practical Fit&mdash;are inspired by broad MCDA
             frameworks such as Keeney&rsquo;s Value-Focused Thinking and Belton
             &amp; Stewart&rsquo;s MCDA work. They provide a reusable starting
             ontology while leaving final judgment with you.
@@ -222,12 +222,12 @@ export default function Landing() {
             </h3>
             <div className="flex flex-wrap gap-2">
               {[
-                "Financial",
-                "Quality",
-                "Time",
-                "Risk",
-                "Experience",
-                "Convenience",
+                "Resource Fit",
+                "Objective Fit",
+                "Time Fit",
+                "Assurance Fit",
+                "People Fit",
+                "Practical Fit",
               ].map((dim) => (
                 <Badge
                   key={dim}

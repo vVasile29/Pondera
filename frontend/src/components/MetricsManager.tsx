@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { FIT_CATEGORY_OPTIONS } from "@/lib/ontology";
 import {
   Select,
   SelectContent,
@@ -16,14 +17,7 @@ import {
 import { Plus, Pencil, Trash2, Loader2, RefreshCw } from "lucide-react";
 import type { GroupedMetric, CreateMetricPayload, UpdateMetricPayload } from "@/types";
 
-const CATEGORIES = [
-  "Financial",
-  "Quality",
-  "Time",
-  "Risk",
-  "Experience",
-  "Convenience",
-];
+const CATEGORIES: string[] = [...FIT_CATEGORY_OPTIONS];
 
 type FormState = {
   name: string;
@@ -34,7 +28,7 @@ type FormState = {
 
 const emptyForm = (): FormState => ({
   name: "",
-  category: "Financial",
+  category: "Resource Fit",
   description: "",
   categoryOther: false,
 });
@@ -244,7 +238,7 @@ export default function MetricsManager() {
                       onClick={() =>
                         setCreateForm({
                           ...createForm,
-                          category: "Financial",
+                          category: "Resource Fit",
                           categoryOther: false,
                         })
                       }
@@ -364,7 +358,7 @@ export default function MetricsManager() {
                                   onClick={() =>
                                     setEditForm({
                                       ...editForm,
-                                      category: "Financial",
+                                      category: "Resource Fit",
                                       categoryOther: false,
                                     })
                                   }

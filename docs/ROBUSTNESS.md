@@ -17,8 +17,8 @@ Each simulation iteration:
 4. **Perturb scores** — each score is shifted by a uniform random delta in
    [-5, +5] points (independent per score).
 5. **Clip scores** to [0, 100].
-6. **Recompute fit scores and rankings** using the standard benefit-oriented
-   MCDA formula (higher score is always better; no direction inversion).
+6. **Recompute fit scores and rankings** using the standard fit-score
+   MCDA formula (higher score is always better; no score inversion).
 7. **Track**:
    - How often the base-case winner remains first (`winner_retained_count`).
    - How often the winner changes (`winner_changed_count`).

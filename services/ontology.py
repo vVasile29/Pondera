@@ -1,218 +1,310 @@
-"""Universal criteria ontology — MCDA-based framework for decision analysis.
+"""Universal fit ontology for decision analysis.
 
-Based on multi-criteria decision analysis (MCDA) theory (Keeney's Value-Focused
-Thinking, Belton & Stewart's MCDA framework), these 6 universal value dimensions
-cover the minimum criteria set applicable to virtually ANY decision.
+Every metric is a 0–100 fit score. Higher always means better fit.
 """
 
 import re
 from typing import List
 
+
+FIT_SCORE_HELPER_TEXT = (
+    "Every slider is a 0–100 fit score. Higher always means better fit."
+)
+
+FIT_SCORE_EXPORT_EXPLANATION = (
+    "All scores are 0–100 fit scores. Higher means the alternative fits the "
+    "decision better on that metric."
+)
+
+FIT_CATEGORY_NAMES = [
+    "Resource Fit",
+    "Objective Fit",
+    "Time Fit",
+    "Assurance Fit",
+    "People Fit",
+    "Practical Fit",
+]
+
+OLD_TO_NEW_CATEGORY_NAMES = {
+    "Financial": {"name": "Resource Fit", "stable_id": "resource_fit"},
+    "Quality": {"name": "Objective Fit", "stable_id": "objective_fit"},
+    "Time": {"name": "Time Fit", "stable_id": "time_fit"},
+    "Risk": {"name": "Assurance Fit", "stable_id": "assurance_fit"},
+    "Experience": {"name": "People Fit", "stable_id": "people_fit"},
+    "Convenience": {"name": "Practical Fit", "stable_id": "practical_fit"},
+}
+
+OLD_TO_NEW_METRIC_NAMES = {
+    "Cost": {"name": "Affordability", "stable_id": "affordability"},
+    "Value": {"name": "Value", "stable_id": "value"},
+    "Performance": {"name": "Effectiveness", "stable_id": "effectiveness"},
+    "Quality": {"name": "Quality", "stable_id": "quality"},
+    "Time Required": {"name": "Timeliness", "stable_id": "timeliness"},
+    "Efficiency": {"name": "Efficiency", "stable_id": "efficiency"},
+    "Risk": {"name": "Reliability", "stable_id": "reliability"},
+    "Safety": {"name": "Protection", "stable_id": "protection"},
+    "Enjoyment": {"name": "Desirability", "stable_id": "desirability"},
+    "Satisfaction": {"name": "Acceptance", "stable_id": "acceptance"},
+    "Convenience": {"name": "Feasibility", "stable_id": "feasibility"},
+    "Accessibility": {"name": "Flexibility", "stable_id": "flexibility"},
+}
+
+RESERVED_LEGACY_METRIC_NAMES = {
+    old_name
+    for old_name, mapped in OLD_TO_NEW_METRIC_NAMES.items()
+    if old_name != mapped["name"]
+}
+
 UNIVERSAL_DIMENSIONS = [
     {
-        "name": "Financial",
-        "description": "Monetary costs, budget, price, and financial resources",
-        "keywords": [
-            "cost",
-            "price",
-            "budget",
-            "money",
-            "expensive",
-            "cheap",
-            "afford",
-            "financial",
-            "economic",
-            "dollar",
-            "fee",
-            "expense",
-        ],
+        "stable_id": "resource_fit",
+        "name": "Resource Fit",
+        "question": "Is the required burden acceptable and worth it?",
+        "description": "Is the required burden acceptable and worth it?",
+        "keywords": ["cost", "price", "budget", "money", "effort", "resource", "value", "afford"],
         "metrics": [
             {
-                "name": "Cost",
-                "description": "Cost fit and affordability",
+                "stable_id": "affordability",
+                "name": "Affordability",
+                "question": "How acceptable is the cost, effort, or resource burden?",
+                "description": "How acceptable is the cost, effort, or resource burden?",
+                "low_anchor": "Unacceptable burden",
+                "mid_anchor": "Acceptable but costly",
+                "high_anchor": "Excellent resource fit",
                 "default_weight": 90,
+                "category_id": "resource_fit",
+                "category": "Resource Fit",
             },
             {
+                "stable_id": "value",
                 "name": "Value",
-                "description": "Return on investment and bang for buck",
+                "question": "How much benefit is created relative to the burden?",
+                "description": "How much benefit is created relative to the burden?",
+                "low_anchor": "Poor value",
+                "mid_anchor": "Fair value",
+                "high_anchor": "Excellent value",
                 "default_weight": 75,
+                "category_id": "resource_fit",
+                "category": "Resource Fit",
             },
         ],
     },
     {
-        "name": "Quality",
-        "description": "Performance, effectiveness, durability, and excellence",
-        "keywords": [
-            "quality",
-            "performance",
-            "effective",
-            "durable",
-            "reliable",
-            "excellent",
-            "good",
-            "better",
-            "best",
-            "superior",
-            "efficient",
-        ],
+        "stable_id": "objective_fit",
+        "name": "Objective Fit",
+        "question": "Does this achieve the purpose of the decision?",
+        "description": "Does this achieve the purpose of the decision?",
+        "keywords": ["quality", "performance", "effective", "goal", "result", "outcome", "excellent"],
         "metrics": [
             {
+                "stable_id": "effectiveness",
+                "name": "Effectiveness",
+                "question": "How well does this solve the core problem or achieve the intended goal?",
+                "description": "How well does this solve the core problem or achieve the intended goal?",
+                "low_anchor": "Does not solve the problem",
+                "mid_anchor": "Partially solves the problem",
+                "high_anchor": "Solves the problem extremely well",
+                "default_weight": 80,
+                "category_id": "objective_fit",
+                "category": "Objective Fit",
+            },
+            {
+                "stable_id": "quality",
                 "name": "Quality",
-                "description": "Overall quality and excellence",
+                "question": "How good, complete, durable, robust, or excellent is the result?",
+                "description": "How good, complete, durable, robust, or excellent is the result?",
+                "low_anchor": "Low quality",
+                "mid_anchor": "Acceptable quality",
+                "high_anchor": "Excellent quality",
                 "default_weight": 85,
-            },
-            {
-                "name": "Performance",
-                "description": "How well it performs or delivers results",
-                "default_weight": 80,
+                "category_id": "objective_fit",
+                "category": "Objective Fit",
             },
         ],
     },
     {
-        "name": "Time",
-        "description": "Duration, speed, efficiency, and timeliness",
-        "keywords": [
-            "time",
-            "speed",
-            "fast",
-            "slow",
-            "duration",
-            "quick",
-            "efficient",
-            "delay",
-            "schedule",
-            "hour",
-            "minute",
-            "deadline",
-        ],
+        "stable_id": "time_fit",
+        "name": "Time Fit",
+        "question": "Does the timing work?",
+        "description": "Does the timing work?",
+        "keywords": ["time", "speed", "delay", "schedule", "deadline", "efficient", "timing"],
         "metrics": [
             {
-                "name": "Time Required",
-                "description": "Time fit, speed, and schedule compatibility",
+                "stable_id": "timeliness",
+                "name": "Timeliness",
+                "question": "How well does the speed, delay, schedule, or time requirement fit the decision?",
+                "description": "How well does the speed, delay, schedule, or time requirement fit the decision?",
+                "low_anchor": "Poor timing fit",
+                "mid_anchor": "Acceptable timing",
+                "high_anchor": "Excellent timing fit",
                 "default_weight": 70,
+                "category_id": "time_fit",
+                "category": "Time Fit",
             },
             {
+                "stable_id": "efficiency",
                 "name": "Efficiency",
-                "description": "Speed and productivity of the option",
+                "question": "How much useful output is achieved per unit of time, effort, or input?",
+                "description": "How much useful output is achieved per unit of time, effort, or input?",
+                "low_anchor": "Inefficient",
+                "mid_anchor": "Acceptably efficient",
+                "high_anchor": "Highly efficient",
                 "default_weight": 65,
+                "category_id": "time_fit",
+                "category": "Time Fit",
             },
         ],
     },
     {
-        "name": "Risk",
-        "description": "Safety, security, potential downsides, and reliability",
-        "keywords": [
-            "risk",
-            "safe",
-            "safety",
-            "secure",
-            "danger",
-            "dangerous",
-            "reliable",
-            "reliability",
-            "trust",
-            "trustworthy",
-            "guarantee",
-            "warranty",
-        ],
+        "stable_id": "assurance_fit",
+        "name": "Assurance Fit",
+        "question": "Can we trust this option to work without unacceptable downside?",
+        "description": "Can we trust this option to work without unacceptable downside?",
+        "keywords": ["risk", "safe", "safety", "secure", "reliable", "trust", "uncertain", "protect"],
         "metrics": [
             {
-                "name": "Risk",
-                "description": "Low-risk fit and downside protection",
+                "stable_id": "reliability",
+                "name": "Reliability",
+                "question": "How likely is this option to work consistently under uncertainty?",
+                "description": "How likely is this option to work consistently under uncertainty?",
+                "low_anchor": "Unreliable or highly uncertain",
+                "mid_anchor": "Manageable uncertainty",
+                "high_anchor": "Highly reliable and predictable",
                 "default_weight": 80,
+                "category_id": "assurance_fit",
+                "category": "Assurance Fit",
             },
             {
-                "name": "Safety",
-                "description": "How safe and secure it is",
+                "stable_id": "protection",
+                "name": "Protection",
+                "question": "How well does this option avoid harm, violations, unacceptable consequences, or irreversible damage?",
+                "description": "How well does this option avoid harm, violations, unacceptable consequences, or irreversible damage?",
+                "low_anchor": "Poorly protected",
+                "mid_anchor": "Acceptably protected",
+                "high_anchor": "Very well protected",
                 "default_weight": 75,
+                "category_id": "assurance_fit",
+                "category": "Assurance Fit",
             },
         ],
     },
     {
-        "name": "Experience",
-        "description": "Enjoyment, satisfaction, comfort, and personal fulfillment",
-        "keywords": [
-            "enjoy",
-            "enjoyment",
-            "fun",
-            "happy",
-            "satisfaction",
-            "satisfy",
-            "comfort",
-            "comfortable",
-            "fulfill",
-            "fulfilling",
-            "like",
-            "love",
-            "pleasure",
-        ],
+        "stable_id": "people_fit",
+        "name": "People Fit",
+        "question": "Does this option fit the people affected?",
+        "description": "Does this option fit the people affected?",
+        "keywords": ["enjoy", "appeal", "satisfaction", "stakeholder", "accept", "approve", "people"],
         "metrics": [
             {
-                "name": "Enjoyment",
-                "description": "How enjoyable and pleasant it is",
+                "stable_id": "desirability",
+                "name": "Desirability",
+                "question": "How attractive, motivating, or personally appealing is this option?",
+                "description": "How attractive, motivating, or personally appealing is this option?",
+                "low_anchor": "Undesirable",
+                "mid_anchor": "Neutral or mixed appeal",
+                "high_anchor": "Highly desirable",
                 "default_weight": 85,
+                "category_id": "people_fit",
+                "category": "People Fit",
             },
             {
-                "name": "Satisfaction",
-                "description": "Expected personal satisfaction",
+                "stable_id": "acceptance",
+                "name": "Acceptance",
+                "question": "How likely is this option to be accepted, approved, adopted, or tolerated by stakeholders?",
+                "description": "How likely is this option to be accepted, approved, adopted, or tolerated by stakeholders?",
+                "low_anchor": "Likely to be rejected",
+                "mid_anchor": "Mixed or uncertain acceptance",
+                "high_anchor": "Likely to be strongly accepted",
                 "default_weight": 80,
+                "category_id": "people_fit",
+                "category": "People Fit",
             },
         ],
     },
     {
-        "name": "Convenience",
-        "description": "Ease of use, accessibility, practicality, and maintenance",
-        "keywords": [
-            "convenient",
-            "convenience",
-            "easy",
-            "accessible",
-            "access",
-            "practical",
-            "simple",
-            "maintenance",
-            "effort",
-            "hassle",
-        ],
+        "stable_id": "practical_fit",
+        "name": "Practical Fit",
+        "question": "Can this option realistically be done, used, accessed, operated, and adapted?",
+        "description": "Can this option realistically be done, used, accessed, operated, and adapted?",
+        "keywords": ["convenient", "easy", "accessible", "practical", "feasible", "flexible", "adapt"],
         "metrics": [
             {
-                "name": "Convenience",
-                "description": "Ease of use, access, and practicality",
+                "stable_id": "feasibility",
+                "name": "Feasibility",
+                "question": "How realistic is it to obtain, implement, use, maintain, or execute this option?",
+                "description": "How realistic is it to obtain, implement, use, maintain, or execute this option?",
+                "low_anchor": "Not realistically feasible",
+                "mid_anchor": "Feasible with effort",
+                "high_anchor": "Highly feasible",
                 "default_weight": 70,
+                "category_id": "practical_fit",
+                "category": "Practical Fit",
             },
             {
-                "name": "Accessibility",
-                "description": "How easy it is to obtain, reach, or maintain",
+                "stable_id": "flexibility",
+                "name": "Flexibility",
+                "question": "How well can this option adapt, scale, reverse, or remain useful if conditions change?",
+                "description": "How well can this option adapt, scale, reverse, or remain useful if conditions change?",
+                "low_anchor": "Rigid or hard to change",
+                "mid_anchor": "Somewhat adaptable",
+                "high_anchor": "Highly flexible and adaptable",
                 "default_weight": 65,
+                "category_id": "practical_fit",
+                "category": "Practical Fit",
             },
         ],
     },
 ]
 
-# Flat list of all universal metrics for easy iteration
 UNIVERSAL_METRICS = []
 for dim in UNIVERSAL_DIMENSIONS:
-    for m in dim["metrics"]:
-        UNIVERSAL_METRICS.append(m)
+    for metric in dim["metrics"]:
+        UNIVERSAL_METRICS.append(metric)
+
+METRIC_METADATA_BY_NAME = {metric["name"]: metric for metric in UNIVERSAL_METRICS}
+CATEGORY_METADATA_BY_NAME = {dim["name"]: dim for dim in UNIVERSAL_DIMENSIONS}
+
+
+def ontology_metric_metadata(name: str) -> dict | None:
+    return METRIC_METADATA_BY_NAME.get(name)
+
+
+def serialize_metric_metadata(metric) -> dict:
+    metadata = ontology_metric_metadata(metric.name)
+    if not metadata:
+        return {
+            "id": metric.id,
+            "stable_id": None,
+            "name": metric.name,
+            "category": metric.category,
+            "category_id": None,
+            "description": metric.description or "",
+            "question": metric.description or "",
+            "anchors": None,
+        }
+    return {
+        "id": metric.id,
+        "stable_id": metadata["stable_id"],
+        "name": metadata["name"],
+        "category": metadata["category"],
+        "category_id": metadata["category_id"],
+        "description": metadata["description"],
+        "question": metadata["question"],
+        "anchors": {
+            "low": metadata["low_anchor"],
+            "mid": metadata["mid_anchor"],
+            "high": metadata["high_anchor"],
+        },
+    }
 
 
 def get_universal_criteria() -> tuple[str, list]:
-    """Return the universal criteria set.
-
-    Returns (dimension_name, metrics_list).
-    Always returns the full universal set since all dimensions apply
-    universally across any decision type.
-    """
+    """Return the universal fit criteria set."""
     return "General", UNIVERSAL_METRICS
 
 
 def extract_alternatives(query: str) -> List[str]:
-    """Extract alternatives from a decision query.
-
-    Splits on " or ", " vs ", " versus ", " vs. " (case-insensitive),
-    and cleans up each alternative.
-    Returns empty list if no comparison markers are found.
-    """
+    """Extract alternatives from a decision query."""
     match = re.search(
         r"(.+?)\s+(?:or|vs\.?|versus)\s+(.+)",
         query,

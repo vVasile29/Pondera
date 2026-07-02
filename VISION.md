@@ -42,14 +42,14 @@ or inspired by MCDA principles, not as academically certified advice.
 The criteria set is intentionally small and reusable. Metrics are global and
 pre-seeded, not created separately for each decision.
 
-| Dimension | Metrics | Direction |
-|-----------|---------|-----------|
-| Financial | Cost, Value | Higher is better (Cost means affordability / cost fit) |
-| Quality | Quality, Performance | Higher is better |
-| Time | Time Required, Efficiency | Higher is better (Time Required means time fit / speed) |
-| Risk | Risk, Safety | Higher is better (Risk means low-risk fit) |
-| Experience | Enjoyment, Satisfaction | Higher is better |
-| Convenience | Convenience, Accessibility | Higher is better |
+| Dimension | Question | Metrics |
+|-----------|----------|---------|
+| Resource Fit | Is the required burden acceptable and worth it? | Affordability, Value |
+| Objective Fit | Does this achieve the purpose of the decision? | Effectiveness, Quality |
+| Time Fit | Does the timing work? | Timeliness, Efficiency |
+| Assurance Fit | Can we trust this option to work without unacceptable downside? | Reliability, Protection |
+| People Fit | Does this option fit the people affected? | Desirability, Acceptance |
+| Practical Fit | Can this option realistically be done, used, accessed, operated, and adapted? | Feasibility, Flexibility |
 
 ---
 
@@ -69,14 +69,14 @@ model is inspectable before it produces an answer.
 
 ### Score on a 0-100 Scale
 
-Alternatives are scored against selected metrics with sliders. Weights and scores
-both use a 0-100 scale, and every score is benefit-oriented: higher is better.
+Alternatives are scored against selected metrics with sliders. Every slider is a
+0–100 fit score. Higher always means better fit.
 
 ### Results and Threshold Filters
 
 Results show weighted fit scores, radar charts, and detailed score tables. The
-result page can also apply threshold filters, such as `Cost >= 60` or
-`Safety >= 80`, to separate passing and failing alternatives. Threshold filters
+result page can also apply threshold filters, such as `Affordability >= 60` or
+`Protection >= 80`, to separate passing and failing alternatives. Threshold filters
 operate on user-entered scores; they do not fetch external facts.
 
 ---

@@ -56,17 +56,17 @@ is no mode picker. The parser auto-detects the decision shape:
 
 ### 2. Universal Criteria Framework
 
-Every decision uses the same 6 pre-seeded value dimensions with 12 curated
+Every decision uses the same 6 pre-seeded fit dimensions with 12 curated
 metrics. Metrics are global and shared — no per-decision criteria creation.
 
-| Dimension | Metrics | Direction |
+| Dimension | Question | Metrics |
 |---|---|---|
-| Financial | Cost, Value | Higher is better (Cost means affordability / cost fit) |
-| Quality | Quality, Performance | Higher is better |
-| Time | Time Required, Efficiency | Higher is better (Time Required means time fit / speed) |
-| Risk | Risk, Safety | Higher is better (Risk means low-risk fit) |
-| Experience | Enjoyment, Satisfaction | Higher is better |
-| Convenience | Convenience, Accessibility | Higher is better |
+| Resource Fit | Is the required burden acceptable and worth it? | Affordability, Value |
+| Objective Fit | Does this achieve the purpose of the decision? | Effectiveness, Quality |
+| Time Fit | Does the timing work? | Timeliness, Efficiency |
+| Assurance Fit | Can we trust this option to work without unacceptable downside? | Reliability, Protection |
+| People Fit | Does this option fit the people affected? | Desirability, Acceptance |
+| Practical Fit | Can this option realistically be done, used, accessed, operated, and adapted? | Feasibility, Flexibility |
 
 ### 3. Decision-Level Weights
 
@@ -77,8 +77,8 @@ alternatives. The scoring formula is a weighted additive MCDA model:
 fit = Σ(score[criterion] × weight[criterion]) / Σ(weight[criterion]) / 100.0
 ```
 
-Scores are benefit-oriented: higher is always better. Scores and weights both
-use a 0–100 granular scale.
+Every slider is a 0–100 fit score. Higher always means better fit. Scores and
+weights both use a 0–100 granular scale.
 
 ### 4. Results, Thresholds, and Robustness
 
@@ -86,9 +86,9 @@ use a 0–100 granular scale.
   on the review page. Alternatives failing any KO criterion are eliminated
   before ranking. KO criteria act as a pre-scoring eligibility gate.
 - **Radar chart** — visualize how alternatives compare across all criteria.
-- **Post-hoc threshold filters** — apply must-have cutoffs (e.g. `Cost >= 60`,
-  `Safety >= 80`) after scoring to separate passing and failing alternatives.
-  Thresholds operate on the displayed user-entered benefit scores — the score
+- **Post-hoc threshold filters** — apply must-have cutoffs (e.g.
+  `Affordability >= 60`, `Protection >= 80`) after scoring to separate passing
+  and failing alternatives. Thresholds operate on the displayed user-entered fit scores — the score
   you see on the slider is the score compared against the threshold.
 - **Robustness analysis** — Monte Carlo sensitivity analysis that perturbs
   weights and scores within a plausible range, then reports how often the

@@ -3,6 +3,7 @@ import {
   pythonRound,
   recomputeFitScores,
 } from "../src/lib/scoring.js";
+import { METRICS_MANAGER_CATEGORY_OPTIONS } from "../src/lib/ontology.js";
 import type { Activity, FilterResult, FitResult, ScoreRow } from "../src/types/index.js";
 
 function assertEqual<T>(actual: T, expected: T) {
@@ -32,7 +33,7 @@ function names(results: FitResult[]) {
   const rows: ScoreRow[] = [
     {
       metric_id: 10,
-      metric_name: "Cost",
+      metric_name: "Affordability",
       metric_desc: "",
       weight: 100,
       scores: { 1: 80, 2: 20 },
@@ -49,7 +50,7 @@ function names(results: FitResult[]) {
   const rows: ScoreRow[] = [
     {
       metric_id: 10,
-      metric_name: "Cost",
+      metric_name: "Affordability",
       metric_desc: "",
       weight: 50,
       scores: { 1: 30, 2: 70 },
@@ -67,7 +68,7 @@ function names(results: FitResult[]) {
   const restored = recomputeFitScores(
     activities,
     rows,
-    { Cost: 50, Quality: 50 },
+    { Affordability: 50, Quality: 50 },
   );
   assertDeepEqual(restored, base);
 }
@@ -76,7 +77,7 @@ function names(results: FitResult[]) {
   const rows: ScoreRow[] = [
     {
       metric_id: 10,
-      metric_name: "Cost",
+      metric_name: "Affordability",
       metric_desc: "",
       weight: 100,
       scores: { 1: 80, 2: 10 },
@@ -93,7 +94,7 @@ function names(results: FitResult[]) {
   const results = recomputeFitScores(
     activities,
     rows,
-    { Cost: 100, Quality: 100 },
+    { Affordability: 100, Quality: 100 },
   );
   const alpha = results.find((r) => r.activity_id === 1)!;
   const beta = results.find((r) => r.activity_id === 2)!;
@@ -140,8 +141,8 @@ function names(results: FitResult[]) {
   const filterResult: FilterResult = {
     passed: [],
     failed: [
-      { activity_id: 1, activity_name: "Alpha", reasons: ["Cost fails"] },
-      { activity_id: 2, activity_name: "Beta", reasons: ["Cost fails"] },
+      { activity_id: 1, activity_name: "Alpha", reasons: ["Affordability fails"] },
+      { activity_id: 2, activity_name: "Beta", reasons: ["Affordability fails"] },
     ],
     all_passed: false,
     survivor_results: [],
@@ -149,6 +150,18 @@ function names(results: FitResult[]) {
 
   assertDeepEqual(filterResultsToSurvivors(allResults, filterResult), []);
   assertDeepEqual(filterResultsToSurvivors(allResults, null), allResults);
+}
+
+{
+  assertDeepEqual(METRICS_MANAGER_CATEGORY_OPTIONS, [
+    "Resource Fit",
+    "Objective Fit",
+    "Time Fit",
+    "Assurance Fit",
+    "People Fit",
+    "Practical Fit",
+    "Other…",
+  ]);
 }
 
 console.log("frontend scoring tests passed");

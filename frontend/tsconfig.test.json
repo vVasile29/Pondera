@@ -8,5 +8,5 @@
     "outDir": "/tmp/opencode/optium-frontend-test-dist",
     "rootDir": "."
   },
-  "include": ["src/lib/scoring.ts", "src/types/index.ts", "tests/**/*.ts"]
+  "include": ["src/lib/scoring.ts", "src/lib/ontology.ts", "src/types/index.ts", "tests/**/*.ts"]
 }

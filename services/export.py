@@ -9,6 +9,7 @@ from services.scoring import (
     sanitize_persisted_ko_criteria,
     sanitize_persisted_thresholds,
 )
+from services.ontology import FIT_SCORE_EXPORT_EXPLANATION, serialize_metric_metadata
 
 
 def _selected_metrics(decision_id: int, db: Session) -> list[Metric]:
@@ -64,6 +65,8 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
                 "metric_id": metric.id,
                 "metric_name": metric.name,
                 "metric_desc": metric.description or "",
+                "metric_question": serialize_metric_metadata(metric)["question"],
+                "metric_anchors": serialize_metric_metadata(metric)["anchors"],
                 "weight": weights_by_metric.get(metric.id, 50),
                 "scores": {
                     activity.name: scores_by_activity.get(activity.id, {}).get(
@@ -97,14 +100,7 @@ def get_decision_export_data(decision_id: int, db: Session) -> dict | None:
         "activities": [
             {"id": activity.id, "name": activity.name} for activity in activities
         ],
-        "metrics": [
-            {
-                "id": metric.id,
-                "name": metric.name,
-                "description": metric.description or "",
-            }
-            for metric in metrics
-        ],
+        "metrics": [serialize_metric_metadata(metric) for metric in metrics],
         "results": results,
         "series": series,
         "robustness": build_decision_robustness(
@@ -126,6 +122,8 @@ def generate_markdown_brief(data: dict) -> str:
         f"# Decision Brief: {decision['query']}",
         "",
         f"- Created: {decision['created_at']}",
+        "",
+        FIT_SCORE_EXPORT_EXPLANATION,
         "",
         "## Alternatives",
     ]

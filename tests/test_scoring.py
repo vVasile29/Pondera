@@ -34,7 +34,7 @@ def make_decision(db, query="Test decision?"):
     return d
 
 
-def make_metric(db, name, category="Financial"):
+def make_metric(db, name, category="Resource Fit"):
     m = Metric(name=name, category=category)
     db.add(m)
     db.flush()
@@ -50,12 +50,12 @@ def make_activity(db, name, decision_id):
 
 def test_basic_scoring(db):
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost")
+    m1 = make_metric(db, "Affordability")
     m2 = make_metric(db, "Quality")
     alt1 = make_activity(db, "Option A", decision.id)
     alt2 = make_activity(db, "Option B", decision.id)
 
-    # Weights: Cost=80, Quality=60 (decision-level, shared across all activities)
+    # Weights: Affordability=80, Quality=60 (decision-level, shared across all activities)
     db.add_all(
         [
             DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=80),
@@ -64,7 +64,7 @@ def test_basic_scoring(db):
     )
     db.flush()
 
-    # Scores: Option A -> Cost=30, Quality=80; Option B -> Cost=70, Quality=40
+    # Scores: Option A -> Affordability=30, Quality=80; Option B -> Affordability=70, Quality=40
     db.add_all(
         [
             AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=30),
@@ -83,10 +83,10 @@ def test_basic_scoring(db):
     assert round(results[1]["fit_score"], 4) == 0.5143
 
 
-def test_scores_are_direct_benefit_values(db):
-    """Scores are treated as direct benefit-oriented values."""
+def test_scores_are_direct_fit_values(db):
+    """Scores are treated as direct fit values."""
     decision = make_decision(db)
-    m = make_metric(db, "Cost")
+    m = make_metric(db, "Affordability")
     alt = make_activity(db, "Cheap", decision.id)
     db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
     db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
@@ -97,11 +97,11 @@ def test_scores_are_direct_benefit_values(db):
 
 
 def test_mixed_metric_scoring_uses_direct_benefit_values(db):
-    """Multiple metrics use direct benefit scores."""
+    """Multiple metrics use direct fit scores."""
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost", category="Financial")
-    m2 = make_metric(db, "Quality", category="Quality")
-    m3 = make_metric(db, "Risk", category="Risk")
+    m1 = make_metric(db, "Affordability", category="Resource Fit")
+    m2 = make_metric(db, "Quality", category="Objective Fit")
+    m3 = make_metric(db, "Reliability", category="Assurance Fit")
     alt1 = make_activity(db, "Option A", decision.id)
     alt2 = make_activity(db, "Option B", decision.id)
 
@@ -133,11 +133,11 @@ def test_mixed_metric_scoring_uses_direct_benefit_values(db):
     assert round(results[1]["fit_score"], 4) == 0.4737
 
 
-def test_all_low_cost_risk_scores_are_direct_values(db):
-    """All scores are treated as benefit scores."""
+def test_all_fit_scores_are_direct_values(db):
+    """All scores are treated as fit scores."""
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost")
-    m2 = make_metric(db, "Risk")
+    m1 = make_metric(db, "Affordability")
+    m2 = make_metric(db, "Reliability")
     alt1 = make_activity(db, "Good", decision.id)
     alt2 = make_activity(db, "Bad", decision.id)
     db.add_all(
@@ -161,7 +161,7 @@ def test_all_low_cost_risk_scores_are_direct_values(db):
 def test_boundary_scores(db):
     """Scores at 0 and 100 boundaries."""
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost")
+    m1 = make_metric(db, "Affordability")
     m2 = make_metric(db, "Quality")
     alt1 = make_activity(db, "Best", decision.id)
     alt2 = make_activity(db, "Worst", decision.id)
@@ -182,13 +182,13 @@ def test_boundary_scores(db):
     assert round(results[1]["fit_score"], 4) == 0.5
 
 
-def test_dimension_scores_use_direct_benefit_scores(db):
-    """Dimension scores should use direct benefit-oriented scores."""
+def test_dimension_scores_use_direct_fit_scores(db):
+    """Dimension scores should use direct fit scores."""
     from services.scoring import compute_dimension_scores
 
     decision = make_decision(db)
-    m1 = make_metric(db, "Cost", category="Financial")
-    m2 = make_metric(db, "Value", category="Financial")
+    m1 = make_metric(db, "Affordability", category="Resource Fit")
+    m2 = make_metric(db, "Value", category="Resource Fit")
     alt = make_activity(db, "Option", decision.id)
     db.add_all(
         [
@@ -203,14 +203,14 @@ def test_dimension_scores_use_direct_benefit_scores(db):
     dim_scores = compute_dimension_scores(decision.id, db)
     assert len(dim_scores) == 1
     fin = dim_scores[0]
-    assert fin["dimension"] == "Financial"
+    assert fin["dimension"] == "Resource Fit"
     assert fin["score"] == 51.4
 
 
 def test_missing_metric_row_still_scores_directly(db):
     """Missing metric metadata does not affect direct benefit scoring."""
     decision = make_decision(db)
-    m = make_metric(db, "Cost")
+    m = make_metric(db, "Affordability")
     alt = make_activity(db, "Test", decision.id)
     fake_metric_id = 99999  # Does not exist in Metric table
     db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=80))
@@ -284,13 +284,37 @@ def test_sorting_order(db):
     assert results[1]["activity_name"] == "Low"
 
 
+def test_increasing_any_metric_score_cannot_reduce_fit_score(db):
+    decision = make_decision(db)
+    m1 = make_metric(db, "Affordability")
+    m2 = make_metric(db, "Protection", category="Assurance Fit")
+    alt = make_activity(db, "Option", decision.id)
+    db.add_all(
+        [
+            DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=60),
+            DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=40),
+            AlternativeScore(activity_id=alt.id, metric_id=m1.id, score=30),
+            AlternativeScore(activity_id=alt.id, metric_id=m2.id, score=40),
+        ]
+    )
+    db.commit()
+    before = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+
+    score = db.query(AlternativeScore).filter_by(activity_id=alt.id, metric_id=m1.id).one()
+    score.score = 80
+    db.commit()
+    after = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+
+    assert after >= before
+
+
 # ── Threshold filtering tests ──
 
 
 class TestFilterByThresholds:
     def test_all_pass(self, db):
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt = make_activity(db, "Good Fit", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
@@ -306,7 +330,7 @@ class TestFilterByThresholds:
 
     def test_one_fails_one_passes(self, db):
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt1 = make_activity(db, "Affordable", decision.id)
         alt2 = make_activity(db, "Poor Fit", decision.id)
         db.add_all(
@@ -330,7 +354,7 @@ class TestFilterByThresholds:
 
     def test_all_fail(self, db):
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt = make_activity(db, "Poor Fit", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=30))
@@ -359,10 +383,10 @@ class TestFilterByThresholds:
         assert len(result["failed"]) == 0
         assert len(result["survivor_results"]) == 1
 
-    def test_benefit_oriented_minimum_threshold(self, db):
-        """Cost >= 30 with score 50 should pass; score 20 should fail."""
+    def test_fit_score_minimum_threshold(self, db):
+        """Affordability >= 30 with score 50 should pass; score 20 should fail."""
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt_good = make_activity(db, "LowCost", decision.id)
         alt_bad = make_activity(db, "HighCost", decision.id)
         db.add_all(
@@ -392,7 +416,7 @@ class TestEvaluateKoCriteria:
     def test_no_ko_returns_none(self, db):
         """No KO criteria -> None."""
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt = make_activity(db, "Option", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
@@ -404,7 +428,7 @@ class TestEvaluateKoCriteria:
     def test_ko_all_pass(self, db):
         """All metrics scored meets thresholds."""
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt = make_activity(db, "Good", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=80))
@@ -423,7 +447,7 @@ class TestEvaluateKoCriteria:
     def test_ko_one_fails(self, db):
         """One alternative fails, one passes."""
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt1 = make_activity(db, "Pass", decision.id)
         alt2 = make_activity(db, "Fail", decision.id)
         db.add_all(
@@ -454,7 +478,7 @@ class TestEvaluateKoCriteria:
     def test_ko_all_fail(self, db):
         """All fail KO."""
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt1 = make_activity(db, "Low", decision.id)
         alt2 = make_activity(db, "Lower", decision.id)
         db.add_all(
@@ -478,7 +502,7 @@ class TestEvaluateKoCriteria:
     def test_ko_missing_score(self, db):
         """Missing score -> knocked_out."""
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         make_activity(db, "NoScore", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         # No AlternativeScore added
@@ -497,7 +521,7 @@ class TestEvaluateKoCriteria:
     def test_ko_boundary_score(self, db):
         """Score == threshold -> pass."""
         decision = make_decision(db)
-        m = make_metric(db, "Cost")
+        m = make_metric(db, "Affordability")
         alt = make_activity(db, "Boundary", decision.id)
         db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
         db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=60))

@@ -16,11 +16,56 @@ from database import Base, get_db
 from main import app
 from models import Decision, Metric
 from services.decision_limits import MAX_DECISION_ALTERNATIVES, MAX_DECISION_METRICS
+from services.ontology import (
+    FIT_SCORE_EXPORT_EXPLANATION,
+    RESERVED_LEGACY_METRIC_NAMES,
+    UNIVERSAL_METRICS,
+)
 
 # Per-test state
 _test_db_path = None
 _test_engine = None
 _test_session = None
+
+FORBIDDEN_DIRECTION_FIELDS = {
+    "direction",
+    "higher_is_better",
+    "lower_is_better",
+    "score_type",
+}
+
+
+def _assert_no_forbidden_direction_fields(value):
+    if isinstance(value, dict):
+        assert FORBIDDEN_DIRECTION_FIELDS.isdisjoint(value)
+        for child in value.values():
+            _assert_no_forbidden_direction_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            _assert_no_forbidden_direction_fields(child)
+
+
+def _expected_metric_metadata(name: str) -> dict:
+    metric = next(m for m in UNIVERSAL_METRICS if m["name"] == name)
+    return {
+        "stable_id": metric["stable_id"],
+        "name": metric["name"],
+        "category": metric["category"],
+        "category_id": metric["category_id"],
+        "description": metric["description"],
+        "question": metric["question"],
+        "anchors": {
+            "low": metric["low_anchor"],
+            "mid": metric["mid_anchor"],
+            "high": metric["high_anchor"],
+        },
+    }
+
+
+def _assert_exact_metric_metadata(payload: dict, name: str) -> None:
+    expected = _expected_metric_metadata(name)
+    for key, expected_value in expected.items():
+        assert payload[key] == expected_value
 
 
 def _get_test_db():
@@ -56,19 +101,9 @@ def db():
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
     _test_session = TestSession()
 
-    # Seed universal metrics
-    from services.ontology import UNIVERSAL_DIMENSIONS
-    from models import Metric as MetricModel
+    from main import reconcile_seed_metrics
 
-    for dim in UNIVERSAL_DIMENSIONS:
-        for m in dim["metrics"]:
-            metric = MetricModel(
-                name=m["name"],
-                category=dim["name"],
-                description=m["description"],
-            )
-            _test_session.add(metric)
-    _test_session.commit()
+    reconcile_seed_metrics(_test_session)
 
     yield _test_session
     _test_session.close()
@@ -410,14 +445,68 @@ def test_seeded_metrics_on_list_page(client, db):
     api_data = api_resp.json()
     grouped = api_data["grouped_metrics"]
     for dim_name in [
-        "Financial",
-        "Quality",
-        "Time",
-        "Risk",
-        "Experience",
-        "Convenience",
+        "Resource Fit",
+        "Objective Fit",
+        "Time Fit",
+        "Assurance Fit",
+        "People Fit",
+        "Practical Fit",
     ]:
         assert dim_name in grouped
+    forbidden = {"direction", "higher_is_better", "lower_is_better", "score_type"}
+    all_metrics = [metric for metrics in grouped.values() for metric in metrics]
+    assert all(forbidden.isdisjoint(metric) for metric in all_metrics)
+    assert all(metric["anchors"] for metric in all_metrics)
+    assert {metric["name"] for metric in all_metrics}.isdisjoint(
+        {"Cost", "Performance", "Time Required", "Risk", "Safety", "Enjoyment", "Satisfaction", "Convenience", "Accessibility"}
+    )
+
+
+def test_metrics_api_exposes_exact_fit_metadata_without_direction_fields(client, db):
+    response = client.get("/api/metrics")
+    assert response.status_code == 200
+    data = response.json()
+    _assert_no_forbidden_direction_fields(data)
+
+    all_metrics = [
+        metric
+        for metrics in data["grouped_metrics"].values()
+        for metric in metrics
+    ]
+    by_name = {metric["name"]: metric for metric in all_metrics}
+    _assert_exact_metric_metadata(by_name["Affordability"], "Affordability")
+    _assert_exact_metric_metadata(by_name["Reliability"], "Reliability")
+
+
+def test_decision_detail_and_refine_expose_exact_fit_contract(client, db):
+    metric = db.query(Metric).filter(Metric.name == "Affordability").one()
+    response = client.post("/api/decide", json={"q": "Tea or Coffee?"})
+    assert response.status_code == 200
+    decision_id = response.json()["decision_id"]
+
+    refine_response = client.post(
+        f"/api/decisions/{decision_id}/refine",
+        json={
+            "alternatives": ["Tea", "Coffee"],
+            "metrics": [{"metric_id": metric.id, "weight": 90}],
+        },
+    )
+    assert refine_response.status_code == 200
+    refine_data = refine_response.json()
+    _assert_no_forbidden_direction_fields(refine_data)
+    _assert_exact_metric_metadata(refine_data["criteria"][0], "Affordability")
+
+    detail_response = client.get(f"/api/decisions/{decision_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    _assert_no_forbidden_direction_fields(detail)
+    _assert_exact_metric_metadata(detail["metrics"][0], "Affordability")
+    assert detail["rows"][0]["metric_question"] == _expected_metric_metadata(
+        "Affordability"
+    )["question"]
+    assert detail["rows"][0]["metric_anchors"] == _expected_metric_metadata(
+        "Affordability"
+    )["anchors"]
 
 
 # ── Evaluate (DIAGNOSE) tests ──
@@ -662,16 +751,102 @@ def test_decision_result_threshold_panel_renders(client, db):
     assert all(tc["operator"] == ">=" for tc in data["threshold_criteria"])
 
 
-def test_seeded_cost_risk_time_have_current_shape(db):
+def test_seeded_fit_metrics_have_current_shape(db):
     metrics = {
         m.name: m
         for m in db.query(Metric)
-        .filter(Metric.name.in_(["Cost", "Risk", "Time Required"]))
+        .filter(Metric.name.in_(["Affordability", "Reliability", "Timeliness"]))
         .all()
     }
-    assert metrics["Cost"].description == "Cost fit and affordability"
-    assert metrics["Risk"].description == "Low-risk fit and downside protection"
-    assert metrics["Time Required"].description == "Time fit, speed, and schedule compatibility"
+    assert metrics["Affordability"].description == "How acceptable is the cost, effort, or resource burden?"
+    assert metrics["Reliability"].description == "How likely is this option to work consistently under uncertainty?"
+    assert metrics["Timeliness"].description == "How well does the speed, delay, schedule, or time requirement fit the decision?"
+
+
+def test_seed_reconciliation_preserves_old_metric_ids_and_scores(db):
+    from main import reconcile_seed_metrics
+    from models import Activity, AlternativeScore, Decision, DecisionWeight
+
+    db.query(Metric).delete()
+    db.commit()
+    old_cost = Metric(name="Cost", category="Financial", description="old")
+    db.add(old_cost)
+    db.flush()
+    decision = Decision(query="Legacy", category="General")
+    db.add(decision)
+    db.flush()
+    activity = Activity(name="Option", category="General", decision_id=decision.id)
+    db.add(activity)
+    db.flush()
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=old_cost.id, weight=90))
+    db.add(AlternativeScore(activity_id=activity.id, metric_id=old_cost.id, score=25))
+    old_id = old_cost.id
+    db.commit()
+
+    reconcile_seed_metrics(db)
+
+    renamed = db.query(Metric).filter(Metric.id == old_id).one()
+    assert renamed.name == "Affordability"
+    assert renamed.category == "Resource Fit"
+    assert db.query(AlternativeScore).filter_by(metric_id=old_id).one().score == 25
+
+
+def test_seed_reconciliation_renames_new_name_conflict_deterministically(db):
+    from main import reconcile_seed_metrics
+
+    db.query(Metric).delete()
+    db.commit()
+    old_cost = Metric(name="Cost", category="Financial", description="old")
+    conflict = Metric(name="Affordability", category="Custom", description="custom")
+    db.add_all([old_cost, conflict])
+    db.flush()
+    old_id = old_cost.id
+    conflict_id = conflict.id
+    db.commit()
+
+    reconcile_seed_metrics(db)
+
+    assert db.query(Metric).filter(Metric.id == old_id).one().name == "Affordability"
+    assert db.query(Metric).filter(Metric.id == conflict_id).one().name == "Affordability (custom)"
+
+
+def test_seed_reconciliation_fresh_insert_creates_exact_fit_metadata(db):
+    from main import reconcile_seed_metrics
+
+    db.query(Metric).delete()
+    db.commit()
+
+    reconcile_seed_metrics(db)
+
+    inserted = db.query(Metric).filter(Metric.name == "Affordability").one()
+    assert inserted.category == "Resource Fit"
+    assert inserted.description == _expected_metric_metadata("Affordability")["description"]
+    assert db.query(Metric).filter(Metric.name.in_(
+        [metric["name"] for metric in UNIVERSAL_METRICS]
+    )).count() == len(UNIVERSAL_METRICS)
+
+
+def test_seed_reconciliation_existing_new_name_upserts_exact_metadata(db):
+    from main import reconcile_seed_metrics
+
+    db.query(Metric).delete()
+    db.commit()
+    metric = Metric(
+        name="Affordability",
+        category="Custom Category",
+        description="Custom description",
+    )
+    db.add(metric)
+    db.flush()
+    metric_id = metric.id
+    db.commit()
+
+    reconcile_seed_metrics(db)
+
+    upserted = db.query(Metric).filter(Metric.id == metric_id).one()
+    assert upserted.name == "Affordability"
+    assert upserted.category == "Resource Fit"
+    assert upserted.description == _expected_metric_metadata("Affordability")["description"]
 
 
 def test_decision_apply_thresholds_valid(client, db):
@@ -1199,8 +1374,11 @@ def test_export_markdown_endpoint(client, db):
     assert resp.headers["content-type"].startswith("text/markdown")
     assert "attachment" in resp.headers["content-disposition"]
     assert "Decision Brief" in resp.text
+    assert FIT_SCORE_EXPORT_EXPLANATION in resp.text
     assert "- Mode:" not in resp.text
     assert "- Category:" not in resp.text
+    for forbidden in FORBIDDEN_DIRECTION_FIELDS:
+        assert forbidden not in resp.text
     assert "Decision Robustness" in resp.text
     assert (
         "Monte Carlo sensitivity analysis on a weighted additive value model (WAVM)"
@@ -1686,19 +1864,19 @@ class TestMetricsCrud:
     def test_create_metric_success(self, client, db):
         resp = client.post("/api/metrics", json={
             "name": "Test Metric",
-            "category": "Financial",
+            "category": "Resource Fit",
             "description": "A test metric",
         })
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "Test Metric"
-        assert data["category"] == "Financial"
+        assert data["category"] == "Resource Fit"
         assert data["description"] == "A test metric"
         assert isinstance(data["id"], int)
 
     def test_create_metric_duplicate_name(self, client, db):
-        client.post("/api/metrics", json={"name": "Dup", "category": "Quality", "description": ""})
-        resp = client.post("/api/metrics", json={"name": "Dup", "category": "Risk", "description": ""})
+        client.post("/api/metrics", json={"name": "Dup", "category": "Objective Fit", "description": ""})
+        resp = client.post("/api/metrics", json={"name": "Dup", "category": "Assurance Fit", "description": ""})
         assert resp.status_code == 422
         assert "already exists" in resp.json()["detail"]
 
@@ -1717,14 +1895,57 @@ class TestMetricsCrud:
         assert resp.status_code == 422
         assert "name is required" in resp.json()["detail"].lower()
 
+    def test_create_metric_rejects_reserved_legacy_seed_name(self, client, db):
+        assert "Cost" in RESERVED_LEGACY_METRIC_NAMES
+
+        resp = client.post(
+            "/api/metrics",
+            json={
+                "name": "Cost",
+                "category": "Resource Fit",
+                "description": "Custom cost metric",
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "reserved" in resp.json()["detail"].lower()
+        assert db.query(Metric).filter(Metric.name == "Cost").count() == 0
+        assert db.query(Metric).filter(Metric.name == "Affordability").count() == 1
+
+    def test_update_metric_rejects_reserved_legacy_seed_name(self, client, db):
+        create = client.post(
+            "/api/metrics",
+            json={
+                "name": "Custom Risk View",
+                "category": "Assurance Fit",
+                "description": "Custom metric",
+            },
+        )
+        metric_id = create.json()["id"]
+
+        resp = client.put(
+            f"/api/metrics/{metric_id}",
+            json={
+                "name": "Risk",
+                "category": "Assurance Fit",
+                "description": "Custom metric",
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "reserved" in resp.json()["detail"].lower()
+        metric = db.query(Metric).filter(Metric.id == metric_id).one()
+        assert metric.name == "Custom Risk View"
+        assert db.query(Metric).filter(Metric.name == "Risk").count() == 0
+
     def test_update_metric_success(self, client, db):
-        create = client.post("/api/metrics", json={"name": "Old", "category": "Financial", "description": "Old desc"})
+        create = client.post("/api/metrics", json={"name": "Old", "category": "Resource Fit", "description": "Old desc"})
         mid = create.json()["id"]
-        resp = client.put(f"/api/metrics/{mid}", json={"name": "New Name", "category": "Quality", "description": "New desc"})
+        resp = client.put(f"/api/metrics/{mid}", json={"name": "New Name", "category": "Objective Fit", "description": "New desc"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "New Name"
-        assert data["category"] == "Quality"
+        assert data["category"] == "Objective Fit"
         assert data["description"] == "New desc"
 
     def test_update_metric_not_found(self, client, db):
@@ -1732,15 +1953,15 @@ class TestMetricsCrud:
         assert resp.status_code == 404
 
     def test_update_metric_duplicate_name(self, client, db):
-        client.post("/api/metrics", json={"name": "Existing", "category": "Financial", "description": ""})
-        create2 = client.post("/api/metrics", json={"name": "Target", "category": "Quality", "description": ""})
+        client.post("/api/metrics", json={"name": "Existing", "category": "Resource Fit", "description": ""})
+        create2 = client.post("/api/metrics", json={"name": "Target", "category": "Objective Fit", "description": ""})
         mid2 = create2.json()["id"]
-        resp = client.put(f"/api/metrics/{mid2}", json={"name": "Existing", "category": "Risk", "description": ""})
+        resp = client.put(f"/api/metrics/{mid2}", json={"name": "Existing", "category": "Assurance Fit", "description": ""})
         assert resp.status_code == 422
         assert "already exists" in resp.json()["detail"]
 
     def test_delete_metric_success(self, client, db):
-        create = client.post("/api/metrics", json={"name": "Delete Me", "category": "Time", "description": ""})
+        create = client.post("/api/metrics", json={"name": "Delete Me", "category": "Time Fit", "description": ""})
         mid = create.json()["id"]
         resp = client.delete(f"/api/metrics/{mid}")
         assert resp.status_code == 200
@@ -1758,7 +1979,7 @@ class TestMetricsCrud:
         from models import DecisionWeight, AlternativeScore, Metric as MetricModel
         
         # Create a metric
-        create = client.post("/api/metrics", json={"name": "Cascade Metric", "category": "Financial", "description": ""})
+        create = client.post("/api/metrics", json={"name": "Cascade Metric", "category": "Resource Fit", "description": ""})
         metric_id = create.json()["id"]
 
         # Create a decision with this metric

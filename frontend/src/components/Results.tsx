@@ -163,6 +163,9 @@ export default function Results() {
         <div>
           <h1 className="text-3xl font-bold">Results</h1>
           <p className="text-muted-foreground mt-1">{data.decision.query}</p>
+          <p className="text-sm text-muted-foreground mt-2">
+            Every slider is a 0–100 fit score. Higher always means better fit.
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -325,7 +328,7 @@ export default function Results() {
       {data.metric_names.length > 0 && data.series.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-xl">Radar Chart</CardTitle>
+            <CardTitle className="text-xl">Fit Score Radar</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="max-w-lg mx-auto">
