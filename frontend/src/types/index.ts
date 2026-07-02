@@ -270,6 +270,7 @@ export interface CreateCustomMetricPayload {
   name: string;
   category: string;
   description?: string;
+  weight?: number;
 }
 
 export interface CustomMetricResponse {
@@ -342,4 +343,70 @@ export interface DeleteResponse {
 
 export interface DecisionListResponse {
   decisions: Decision[];
+}
+
+export interface AIAvailability {
+  enabled: boolean;
+  provider: "openai";
+  model: string;
+  reason: string;
+  caps: Record<string, number>;
+}
+
+export interface EvidenceItem {
+  id: number;
+  decision_id: number;
+  activity_id: number | null;
+  metric_id: number | null;
+  claim: string;
+  rationale: string | null;
+  source_type: "human" | "llm" | "api" | "document" | "system";
+  source_label: string | null;
+  source_url: string | null;
+  confidence: number | null;
+  polarity: "positive" | "negative" | "neutral" | "mixed" | null;
+  review_status: "pending" | "approved" | "rejected";
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ScoreDraft {
+  id: number;
+  decision_id: number;
+  activity_id: number;
+  metric_id: number;
+  suggested_score: number;
+  human_adjusted_score: number | null;
+  effective_score: number;
+  rationale: string | null;
+  source_type: "llm" | "human" | "system";
+  source_label: string | null;
+  confidence: number | null;
+  status: "pending" | "approved" | "edited" | "rejected" | "applied";
+  evidence_ids: number[];
+  applied_score_id: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+  applied_at: string | null;
+}
+
+export interface AIMetricSuggestion {
+  name: string;
+  category: string;
+  description: string;
+  recommended_weight: number;
+  why_it_matters: string;
+  source: string;
+}
+
+export interface AIScoreDraftResponse {
+  score_drafts: ScoreDraft[];
+  warnings: string[];
+  skipped: Array<{ reason: string }>;
+}
+
+export interface AIEvidenceResponse {
+  evidence_items: EvidenceItem[];
+  missing_context_questions: string[];
+  skipped: Array<{ reason: string }>;
 }

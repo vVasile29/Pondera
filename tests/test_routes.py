@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, get_db
 from main import app
-from models import Decision, Metric
+from models import AlternativeScore, Decision, Metric
 from services.decision_limits import MAX_DECISION_ALTERNATIVES, MAX_DECISION_METRICS
 from services.ontology import (
     FIT_SCORE_EXPORT_EXPLANATION,
@@ -2117,6 +2117,24 @@ class TestCustomMetrics:
         assert dw is not None
         assert dw.weight == 50
 
+    def test_create_custom_metric_persists_requested_weight(self, client, db):
+        """AI-selected custom metrics can persist recommended weights immediately."""
+        from models import DecisionWeight
+
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+        resp = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "AI Fit", "category": "Practical Fit", "weight": 73},
+        )
+        assert resp.status_code == 201
+        metric_id = resp.json()["id"]
+        dw = db.query(DecisionWeight).filter(
+            DecisionWeight.decision_id == dec_id,
+            DecisionWeight.metric_id == metric_id,
+        ).one()
+        assert dw.weight == 73
+
     def test_create_custom_metric_duplicate_name_same_decision(self, client, db):
         """Same name within same decision → 422."""
         decide = client.post("/api/decide", json={"q": "Pick one"})
@@ -2664,7 +2682,6 @@ class TestKOCriteriaOnCustomMetrics:
             },
         )
         assert refine.status_code == 200
-        refined = refine.json()
 
         # Get activity IDs
         detail2 = client.get(f"/api/decisions/{dec_id}").json()
@@ -2777,3 +2794,251 @@ class TestMetricLimitWithCustomMetrics:
             },
         )
         assert refine.status_code == 200, f"Expected 200, got {refine.status_code}: {refine.text}"
+
+
+class TestEvidenceAndScoreDrafts:
+    def _decision_cell(self, client):
+        resp = client.post("/api/decide", json={"q": "Option A vs Option B"})
+        assert resp.status_code == 200
+        decision_id = resp.json()["decision_id"]
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        return decision_id, detail["activities"][0]["id"], detail["metrics"][0]["id"]
+
+    def test_ai_status_disabled_does_not_expose_key(self, client, monkeypatch):
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "secret-value")
+        resp = client.get("/api/ai/status")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["enabled"] is True
+        assert payload["provider"] == "openai"
+        assert "secret-value" not in str(payload)
+        assert "OPENAI_API_KEY" not in str(payload)
+
+    def test_evidence_crud_and_review(self, client):
+        decision_id, activity_id, metric_id = self._decision_cell(client)
+        created = client.post(
+            f"/api/decisions/{decision_id}/evidence",
+            json={
+                "claim": "Option A has strong fit evidence",
+                "activity_id": activity_id,
+                "metric_id": metric_id,
+                "confidence": 0.7,
+                "polarity": "positive",
+            },
+        )
+        assert created.status_code == 201
+        evidence = created.json()
+        assert evidence["review_status"] == "pending"
+        approved = client.post(f"/api/decisions/{decision_id}/evidence/{evidence['id']}/approve")
+        assert approved.status_code == 200
+        assert approved.json()["review_status"] == "approved"
+        listed = client.get(f"/api/decisions/{decision_id}/evidence", params={"review_status": "approved"})
+        assert listed.status_code == 200
+        assert [item["id"] for item in listed.json()["evidence"]] == [evidence["id"]]
+        deleted = client.delete(f"/api/decisions/{decision_id}/evidence/{evidence['id']}")
+        assert deleted.status_code == 200
+        assert deleted.json() == {"status": "deleted"}
+
+    def test_drafts_apply_is_only_path_to_final_score(self, client, db):
+        decision_id, activity_id, metric_id = self._decision_cell(client)
+        draft_resp = client.post(
+            f"/api/decisions/{decision_id}/score-drafts",
+            json={"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 88},
+        )
+        assert draft_resp.status_code == 201
+        draft = draft_resp.json()
+        assert db.query(AlternativeScore).count() == 0
+        patch_resp = client.patch(
+            f"/api/decisions/{decision_id}/score-drafts/{draft['id']}",
+            json={"human_adjusted_score": 90},
+        )
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["status"] == "edited"
+        assert db.query(AlternativeScore).count() == 0
+        approve_patch = client.patch(
+            f"/api/decisions/{decision_id}/score-drafts/{draft['id']}",
+            json={"status": "approved"},
+        )
+        assert approve_patch.status_code == 422
+        approve_resp = client.post(f"/api/decisions/{decision_id}/score-drafts/{draft['id']}/approve")
+        assert approve_resp.status_code == 200
+        assert approve_resp.json()["status"] == "approved"
+        assert db.query(AlternativeScore).count() == 0
+        apply_resp = client.post(f"/api/decisions/{decision_id}/score-drafts/{draft['id']}/apply")
+        assert apply_resp.status_code == 200
+        assert apply_resp.json()["score"]["score"] == 90
+        assert db.query(AlternativeScore).filter_by(activity_id=activity_id, metric_id=metric_id).one().score == 90
+        second_apply = client.post(f"/api/decisions/{decision_id}/score-drafts/{draft['id']}/apply")
+        assert second_apply.status_code == 409
+
+    def test_manual_score_draft_rejects_llm_source(self, client):
+        decision_id, activity_id, metric_id = self._decision_cell(client)
+        resp = client.post(
+            f"/api/decisions/{decision_id}/score-drafts",
+            json={"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 50, "source_type": "llm"},
+        )
+        assert resp.status_code == 422
+
+    def test_mocked_ai_inserts_pending_only_then_bulk_apply(self, client, db, monkeypatch):
+        decision_id, activity_id, metric_id = self._decision_cell(client)
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        def fake_ai(_prompt):
+            return {
+                "evidence_items": [
+                    {"activity_id": activity_id, "metric_id": metric_id, "claim": "Strong evidence", "confidence": 0.8, "polarity": "positive"}
+                ],
+                "score_drafts": [
+                    {"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 77, "evidence_ids": []}
+                ],
+                "metric_suggestions": [
+                    {"name": "Fit detail", "category": "Practical Fit", "description": "Extra local fit", "recommended_weight": 55}
+                ],
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_ai(prompt))
+        ev_resp = client.post(f"/api/decisions/{decision_id}/ai/draft-evidence", json={})
+        assert ev_resp.status_code == 201
+        evidence = ev_resp.json()["evidence_items"][0]
+        assert evidence["source_type"] == "llm"
+        assert evidence["review_status"] == "pending"
+        draft_resp = client.post(f"/api/decisions/{decision_id}/ai/suggest-scores", json={})
+        assert draft_resp.status_code == 201
+        draft = draft_resp.json()["score_drafts"][0]
+        assert draft["source_type"] == "llm"
+        assert draft["status"] == "pending"
+        assert db.query(AlternativeScore).count() == 0
+        bulk = client.post(f"/api/decisions/{decision_id}/score-drafts/apply", json={"draft_ids": [draft["id"]]})
+        assert bulk.status_code == 200
+        assert bulk.json()["status"] == "applied"
+        assert db.query(AlternativeScore).count() == 1
+        suggestions = client.post(f"/api/decisions/{decision_id}/ai/suggest-metrics", json={})
+        assert suggestions.status_code == 200
+        assert suggestions.json()["metric_suggestions"][0]["name"] == "Fit detail"
+
+    def test_malformed_ai_output_is_safe(self, client, monkeypatch):
+        decision_id, _, _ = self._decision_cell(client)
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: {"score_drafts": "bad"})
+        resp = client.post(f"/api/decisions/{decision_id}/ai/suggest-scores", json={})
+        assert resp.status_code == 502
+
+    def test_ai_max_request_fields_validate_strictly(self, client, monkeypatch):
+        decision_id, _, _ = self._decision_cell(client)
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: {})
+
+        assert client.post(f"/api/decisions/{decision_id}/ai/suggest-metrics", json={"max_suggestions": "2"}).status_code == 422
+        assert client.post(f"/api/decisions/{decision_id}/ai/draft-evidence", json={"max_items": 0}).status_code == 422
+        assert client.post(f"/api/decisions/{decision_id}/ai/suggest-scores", json={"max_drafts": 101}).status_code == 422
+
+    def test_ai_provider_invalid_numeric_items_are_skipped(self, client, monkeypatch):
+        decision_id, activity_id, metric_id = self._decision_cell(client)
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        def fake_ai(_prompt):
+            return {
+                "metric_suggestions": [
+                    {"name": "Bad", "category": "Resource Fit", "recommended_weight": "heavy"},
+                    {"name": "Good", "category": "Resource Fit", "recommended_weight": 65},
+                ],
+                "evidence_items": [
+                    {"activity_id": activity_id, "metric_id": metric_id, "claim": "Bad confidence", "confidence": "high"},
+                    {"activity_id": activity_id, "metric_id": metric_id, "claim": "Good evidence", "confidence": 0.6},
+                ],
+                "score_drafts": [
+                    {"activity_id": activity_id, "metric_id": metric_id, "suggested_score": "high"},
+                    {"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 72},
+                ],
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_ai(prompt))
+        suggestions = client.post(f"/api/decisions/{decision_id}/ai/suggest-metrics", json={})
+        assert suggestions.status_code == 200
+        assert [item["name"] for item in suggestions.json()["metric_suggestions"]] == ["Good"]
+        evidence = client.post(f"/api/decisions/{decision_id}/ai/draft-evidence", json={})
+        assert evidence.status_code == 201
+        assert [item["claim"] for item in evidence.json()["evidence_items"]] == ["Good evidence"]
+        assert len(evidence.json()["skipped"]) == 1
+        drafts = client.post(f"/api/decisions/{decision_id}/ai/suggest-scores", json={})
+        assert drafts.status_code == 201
+        assert [item["suggested_score"] for item in drafts.json()["score_drafts"]] == [72]
+        assert len(drafts.json()["skipped"]) == 1
+
+    def test_ai_filters_and_evidence_review_policy_are_enforced(self, client, monkeypatch):
+        resp = client.post("/api/decide", json={"q": "Option A vs Option B"})
+        decision_id = resp.json()["decision_id"]
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        activity_id = detail["activities"][0]["id"]
+        other_activity_id = detail["activities"][1]["id"]
+        metric_id = detail["metrics"][0]["id"]
+        other_metric_id = detail["metrics"][1]["id"]
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        def fake_evidence(_prompt):
+            return {
+                "evidence_items": [
+                    {"claim": "general"},
+                    {"activity_id": other_activity_id, "metric_id": metric_id, "claim": "wrong activity"},
+                    {"activity_id": activity_id, "metric_id": other_metric_id, "claim": "wrong metric"},
+                    {"activity_id": activity_id, "metric_id": metric_id, "claim": "allowed"},
+                ]
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_evidence(prompt))
+        evidence_resp = client.post(
+            f"/api/decisions/{decision_id}/ai/draft-evidence",
+            json={"activity_ids": [activity_id], "metric_ids": [metric_id], "include_general_evidence": False},
+        )
+        assert evidence_resp.status_code == 201
+        evidence_payload = evidence_resp.json()
+        assert [item["claim"] for item in evidence_payload["evidence_items"]] == ["allowed"]
+        assert len(evidence_payload["skipped"]) == 3
+        evidence_id = evidence_payload["evidence_items"][0]["id"]
+        approved = client.post(f"/api/decisions/{decision_id}/evidence/{evidence_id}/approve").json()
+
+        pending_evidence = client.post(
+            f"/api/decisions/{decision_id}/evidence",
+            json={"activity_id": activity_id, "metric_id": metric_id, "claim": "pending link"},
+        ).json()
+
+        def fake_scores(_prompt):
+            return {
+                "score_drafts": [
+                    {"activity_id": other_activity_id, "metric_id": metric_id, "suggested_score": 80},
+                    {"activity_id": activity_id, "metric_id": other_metric_id, "suggested_score": 80},
+                    {"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 80, "evidence_ids": [pending_evidence["id"]]},
+                    {"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 81, "evidence_ids": [approved["id"]]},
+                ]
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_scores(prompt))
+        draft_resp = client.post(
+            f"/api/decisions/{decision_id}/ai/suggest-scores",
+            json={"activity_ids": [activity_id], "metric_ids": [metric_id], "evidence_review_policy": "approved_only"},
+        )
+        assert draft_resp.status_code == 201
+        draft_payload = draft_resp.json()
+        assert [item["suggested_score"] for item in draft_payload["score_drafts"]] == [81]
+        assert len(draft_payload["skipped"]) == 3
+
+    def test_patch_any_pending_or_approved_draft_edit_marks_edited(self, client):
+        decision_id, activity_id, metric_id = self._decision_cell(client)
+        draft = client.post(
+            f"/api/decisions/{decision_id}/score-drafts",
+            json={"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 50},
+        ).json()
+        approved = client.post(f"/api/decisions/{decision_id}/score-drafts/{draft['id']}/approve")
+        assert approved.status_code == 200
+        edited = client.patch(
+            f"/api/decisions/{decision_id}/score-drafts/{draft['id']}",
+            json={"rationale": "Human edited rationale"},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["status"] == "edited"

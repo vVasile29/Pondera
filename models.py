@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     DateTime,
     UniqueConstraint,
+    Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -126,3 +127,59 @@ class AlternativeScore(Base):
 
     def __repr__(self):
         return f"<AlternativeScore(activity={self.activity_id}, metric={self.metric_id}, score={self.score})>"
+
+
+class EvidenceItem(Base):
+    __tablename__ = "evidence_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    decision_id = Column(Integer, ForeignKey("decisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    activity_id = Column(Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=True, index=True)
+    metric_id = Column(Integer, ForeignKey("metrics.id", ondelete="CASCADE"), nullable=True, index=True)
+    claim = Column(String(1000), nullable=False)
+    rationale = Column(String(2000), nullable=True)
+    source_type = Column(String(20), nullable=False, default="human")
+    source_label = Column(String(120), nullable=True)
+    source_url = Column(String(1000), nullable=True)
+    confidence = Column(Float, nullable=True)
+    polarity = Column(String(20), nullable=True)
+    review_status = Column(String(20), nullable=False, default="pending", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_evidence_decision_activity_metric", "decision_id", "activity_id", "metric_id"),
+        Index("ix_evidence_decision_status", "decision_id", "review_status"),
+    )
+
+
+class ScoreDraft(Base):
+    __tablename__ = "score_drafts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    decision_id = Column(Integer, ForeignKey("decisions.id", ondelete="CASCADE"), nullable=False, index=True)
+    activity_id = Column(Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False, index=True)
+    metric_id = Column(Integer, ForeignKey("metrics.id", ondelete="CASCADE"), nullable=False, index=True)
+    suggested_score = Column(Float, nullable=False)
+    human_adjusted_score = Column(Float, nullable=True)
+    rationale = Column(String(2000), nullable=True)
+    source_type = Column(String(20), nullable=False, default="human")
+    source_label = Column(String(120), nullable=True)
+    confidence = Column(Float, nullable=True)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    applied_score_id = Column(Integer, ForeignKey("alternative_scores.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    applied_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_score_drafts_decision_status", "decision_id", "status"),
+        Index("ix_score_drafts_decision_cell", "decision_id", "activity_id", "metric_id"),
+    )
+
+
+class ScoreDraftEvidence(Base):
+    __tablename__ = "score_draft_evidence"
+
+    score_draft_id = Column(Integer, ForeignKey("score_drafts.id", ondelete="CASCADE"), primary_key=True)
+    evidence_item_id = Column(Integer, ForeignKey("evidence_items.id", ondelete="CASCADE"), primary_key=True, index=True)

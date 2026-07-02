@@ -4,6 +4,12 @@ services:
     environment:
       DATABASE_URL: sqlite:////data/optium.db
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4.1-mini}
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_MAX_METRIC_SUGGESTIONS: ${AI_MAX_METRIC_SUGGESTIONS:-8}
+      AI_MAX_SCORE_DRAFTS_PER_REQUEST: ${AI_MAX_SCORE_DRAFTS_PER_REQUEST:-100}
+      AI_MAX_EVIDENCE_ITEMS_PER_REQUEST: ${AI_MAX_EVIDENCE_ITEMS_PER_REQUEST:-100}
     volumes:
       - optium-data:/data
     expose:

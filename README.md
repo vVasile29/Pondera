@@ -127,6 +127,18 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Optional AI draft assistance uses OpenAI on the backend only. Put your key in
+`~/.openapi/secret_key`, then run:
+
+```bash
+python scripts/setup_openai_env.py
+docker compose up --build
+```
+
+The script writes `OPENAI_API_KEY`, `OPENAI_MODEL`, and `AI_ENABLED` to the
+root `.env` without printing the key. AI creates pending evidence and score
+drafts only; final scores change only when you apply a draft.
+
 Open http://localhost:8080. The nginx container serves the SPA and proxies
 `/api/*` requests to the backend.
 

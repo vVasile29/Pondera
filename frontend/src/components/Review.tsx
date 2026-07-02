@@ -19,7 +19,7 @@ import {
   Check,
   Edit3,
 } from "lucide-react";
-import type { Metric } from "@/types";
+import type { AIAvailability, AIMetricSuggestion, Metric } from "@/types";
 
 const DIMENSION_ORDER = [
   "Resource Fit",
@@ -69,6 +69,11 @@ export default function Review() {
   const [editCustomDesc, setEditCustomDesc] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [customApiError, setCustomApiError] = useState<string | null>(null);
+  const [aiStatus, setAiStatus] = useState<AIAvailability | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<AIMetricSuggestion[]>([]);
+  const [selectedSuggestionIndexes, setSelectedSuggestionIndexes] = useState<number[]>([]);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
 
   // Split metrics into global and custom
   const globalMetrics = useMemo(() => {
@@ -123,6 +128,10 @@ export default function Review() {
     });
     setKoThresholds(koInit);
   }, [data]);
+
+  useEffect(() => {
+    api.getAIStatus().then(setAiStatus).catch(() => setAiStatus(null));
+  }, []);
 
   // Group global metrics by dimension category, sorted in ontology order
   const groupedMetrics = useMemo(() => {
@@ -306,6 +315,53 @@ export default function Review() {
       });
     } catch (e: any) {
       setCustomApiError(e.message || "Failed to delete custom metric.");
+    }
+  };
+
+  const handleSuggestMetrics = async () => {
+    if (!id) return;
+    setAiBusy(true);
+    setAiMessage(null);
+    try {
+      const res = await api.suggestMetricsWithAI(parseInt(id), {});
+      setAiSuggestions(res.metric_suggestions);
+      setSelectedSuggestionIndexes(res.metric_suggestions.map((_, index) => index));
+      setAiMessage(`AI suggested ${res.metric_suggestions.length} decision-local metric(s).`);
+    } catch (e: any) {
+      setAiMessage(e.message || "AI metric suggestion failed.");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const updateAiSuggestion = (index: number, patch: Partial<AIMetricSuggestion>) => {
+    setAiSuggestions((prev) => prev.map((suggestion, i) => i === index ? { ...suggestion, ...patch } : suggestion));
+  };
+
+  const handleCreateSelectedSuggestions = async () => {
+    if (!id) return;
+    setAiBusy(true);
+    try {
+      const decisionId = parseInt(id);
+      for (const index of selectedSuggestionIndexes) {
+        const suggestion = aiSuggestions[index];
+        if (!suggestion) continue;
+        const created = await api.createCustomMetric(decisionId, {
+          name: suggestion.name,
+          category: suggestion.category,
+          description: suggestion.description || suggestion.why_it_matters,
+          weight: suggestion.recommended_weight ?? 50,
+        });
+        setMetricWeights((prev) => ({ ...prev, [created.id]: suggestion.recommended_weight ?? 50 }));
+        setIncludedMetrics((prev) => ({ ...prev, [created.id]: true }));
+      }
+      setAiSuggestions([]);
+      setSelectedSuggestionIndexes([]);
+      await refetch();
+    } catch (e: any) {
+      setAiMessage(e.message || "Failed to add AI suggestions.");
+    } finally {
+      setAiBusy(false);
     }
   };
 
@@ -579,6 +635,73 @@ export default function Review() {
               </div>
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-xl">AI metric assistance</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            AI-generated values are drafts until you approve or apply them. Metric suggestions are added as decision-local custom criteria only.
+          </p>
+          {!aiStatus?.enabled && (
+            <Alert>
+              <AlertDescription>
+                AI assistance is unavailable ({aiStatus?.reason ?? "disabled"}).
+              </AlertDescription>
+            </Alert>
+          )}
+          {aiMessage && <p className="text-sm text-muted-foreground">{aiMessage}</p>}
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={handleSuggestMetrics} disabled={!aiStatus?.enabled || aiBusy}>
+              Suggest metrics with AI
+            </Button>
+            {aiSuggestions.length > 0 && (
+              <Button onClick={handleCreateSelectedSuggestions} disabled={aiBusy || !selectedSuggestionIndexes.length}>
+                Add selected as custom metrics
+              </Button>
+            )}
+          </div>
+          {aiSuggestions.length > 0 && (
+            <div className="space-y-2">
+              {aiSuggestions.map((suggestion, index) => (
+                <div key={`${suggestion.name}-${index}`} className="flex items-start gap-2 rounded border p-3 text-sm">
+                  <Checkbox
+                    checked={selectedSuggestionIndexes.includes(index)}
+                    onCheckedChange={(checked) => setSelectedSuggestionIndexes((prev) => checked ? [...prev, index] : prev.filter((i) => i !== index))}
+                  />
+                  <div className="grid flex-1 gap-2 sm:grid-cols-[1fr_1fr_7rem]">
+                    <Input
+                      value={suggestion.name}
+                      onChange={(e) => updateAiSuggestion(index, { name: e.target.value })}
+                      aria-label="AI suggestion name"
+                    />
+                    <Input
+                      value={suggestion.category}
+                      onChange={(e) => updateAiSuggestion(index, { category: e.target.value })}
+                      aria-label="AI suggestion category"
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={suggestion.recommended_weight}
+                      onChange={(e) => updateAiSuggestion(index, { recommended_weight: Number(e.target.value) })}
+                      aria-label="AI suggestion recommended weight"
+                    />
+                    <Input
+                      className="sm:col-span-3"
+                      value={suggestion.description || suggestion.why_it_matters}
+                      onChange={(e) => updateAiSuggestion(index, { description: e.target.value })}
+                      aria-label="AI suggestion description"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -16,6 +16,12 @@ import type {
   CreateMetricPayload,
   UpdateMetricPayload,
   MetricCRUDResponse,
+  AIAvailability,
+  EvidenceItem,
+  ScoreDraft,
+  AIMetricSuggestion,
+  AIEvidenceResponse,
+  AIScoreDraftResponse,
 } from "@/types";
 
 const API_BASE = "/api";
@@ -151,5 +157,65 @@ export const api = {
     return request(`/decisions/${decisionId}/custom-metrics/${metricId}`, {
       method: "DELETE",
     });
+  },
+
+  getAIStatus(): Promise<AIAvailability> {
+    return request("/ai/status");
+  },
+
+  suggestMetricsWithAI(decisionId: number, data: { user_context?: string; max_suggestions?: number }): Promise<{ metric_suggestions: AIMetricSuggestion[]; questions_for_user: string[] }> {
+    return request(`/decisions/${decisionId}/ai/suggest-metrics`, { method: "POST", body: JSON.stringify(data) });
+  },
+
+  draftEvidenceWithAI(decisionId: number, data: { user_context?: string; activity_ids?: number[]; metric_ids?: number[]; include_general_evidence?: boolean; max_items?: number }): Promise<AIEvidenceResponse> {
+    return request(`/decisions/${decisionId}/ai/draft-evidence`, { method: "POST", body: JSON.stringify(data) });
+  },
+
+  suggestScoresWithAI(decisionId: number, data: { user_context?: string; activity_ids?: number[]; metric_ids?: number[]; evidence_review_policy?: "approved_only" | "approved_and_pending"; max_drafts?: number }): Promise<AIScoreDraftResponse> {
+    return request(`/decisions/${decisionId}/ai/suggest-scores`, { method: "POST", body: JSON.stringify(data) });
+  },
+
+  getEvidence(decisionId: number): Promise<{ evidence: EvidenceItem[] }> {
+    return request(`/decisions/${decisionId}/evidence`);
+  },
+
+  createEvidence(decisionId: number, data: Partial<EvidenceItem> & { claim: string }): Promise<EvidenceItem> {
+    return request(`/decisions/${decisionId}/evidence`, { method: "POST", body: JSON.stringify(data) });
+  },
+
+  approveEvidence(decisionId: number, evidenceId: number): Promise<EvidenceItem> {
+    return request(`/decisions/${decisionId}/evidence/${evidenceId}/approve`, { method: "POST" });
+  },
+
+  rejectEvidence(decisionId: number, evidenceId: number): Promise<EvidenceItem> {
+    return request(`/decisions/${decisionId}/evidence/${evidenceId}/reject`, { method: "POST" });
+  },
+
+  deleteEvidence(decisionId: number, evidenceId: number): Promise<{ status: string }> {
+    return request(`/decisions/${decisionId}/evidence/${evidenceId}`, { method: "DELETE" });
+  },
+
+  getScoreDrafts(decisionId: number): Promise<{ drafts: ScoreDraft[] }> {
+    return request(`/decisions/${decisionId}/score-drafts`);
+  },
+
+  updateScoreDraft(decisionId: number, draftId: number, data: Partial<ScoreDraft>): Promise<ScoreDraft> {
+    return request(`/decisions/${decisionId}/score-drafts/${draftId}`, { method: "PATCH", body: JSON.stringify(data) });
+  },
+
+  approveScoreDraft(decisionId: number, draftId: number): Promise<ScoreDraft> {
+    return request(`/decisions/${decisionId}/score-drafts/${draftId}/approve`, { method: "POST" });
+  },
+
+  rejectScoreDraft(decisionId: number, draftId: number): Promise<ScoreDraft> {
+    return request(`/decisions/${decisionId}/score-drafts/${draftId}/reject`, { method: "POST" });
+  },
+
+  applyScoreDraft(decisionId: number, draftId: number): Promise<{ draft: ScoreDraft; score: { id: number; activity_id: number; metric_id: number; score: number } }> {
+    return request(`/decisions/${decisionId}/score-drafts/${draftId}/apply`, { method: "POST" });
+  },
+
+  applyScoreDrafts(decisionId: number, draftIds: number[]): Promise<{ status: string; applied_draft_ids: number[]; scores: Array<{ id: number; activity_id: number; metric_id: number; score: number }> }> {
+    return request(`/decisions/${decisionId}/score-drafts/apply`, { method: "POST", body: JSON.stringify({ draft_ids: draftIds }) });
   },
 };
