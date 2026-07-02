@@ -147,6 +147,9 @@ export default function Scoring() {
   };
 
   const handleApplyDraft = async (draft: ScoreDraft) => {
+    if (draftEditScores[draft.id] !== undefined && draftEditScores[draft.id] !== draft.effective_score) {
+      await api.updateScoreDraft(decisionId, draft.id, { human_adjusted_score: draftEditScores[draft.id] });
+    }
     const res = await api.applyScoreDraft(decisionId, draft.id);
     updateScore(res.score.activity_id, res.score.metric_id, res.score.score);
     await refreshEvidenceDrafts();
@@ -158,14 +161,46 @@ export default function Scoring() {
     await refreshEvidenceDrafts();
   };
 
-  const handleApproveDraft = async (draft: ScoreDraft) => {
-    await api.approveScoreDraft(decisionId, draft.id);
+  const pendingEvidenceCount = evidence.filter((e) => e.review_status === "pending").length;
+  const pendingDraftCount = drafts.filter((d) => d.status !== "applied" && d.status !== "rejected").length;
+
+  const handleApproveAllEvidence = async () => {
+    const pending = evidence.filter((e) => e.review_status === "pending");
+    for (const item of pending) {
+      await api.approveEvidence(decisionId, item.id);
+    }
     await refreshEvidenceDrafts();
   };
 
-  const handleEditDraft = async (draft: ScoreDraft) => {
-    const score = draftEditScores[draft.id] ?? draft.effective_score;
-    await api.updateScoreDraft(decisionId, draft.id, { human_adjusted_score: score });
+  const handleRejectAllEvidence = async () => {
+    const pending = evidence.filter((e) => e.review_status === "pending");
+    for (const item of pending) {
+      await api.rejectEvidence(decisionId, item.id);
+    }
+    await refreshEvidenceDrafts();
+  };
+
+  const handleApplyAllDrafts = async () => {
+    const eligible = drafts.filter((d) => d.status !== "applied" && d.status !== "rejected");
+    for (const draft of eligible) {
+      if (draftEditScores[draft.id] !== undefined && draftEditScores[draft.id] !== draft.effective_score) {
+        await api.updateScoreDraft(decisionId, draft.id, { human_adjusted_score: draftEditScores[draft.id] });
+      }
+    }
+    const ids = eligible.map((d) => d.id);
+    if (!ids.length) return;
+    const res = await api.applyScoreDrafts(decisionId, ids);
+    res.scores.forEach((score) => updateScore(score.activity_id, score.metric_id, score.score));
+    setSelectedDraftIds([]);
+    await refreshEvidenceDrafts();
+  };
+
+  const handleRejectAllDrafts = async () => {
+    const eligible = drafts.filter((d) => d.status !== "applied" && d.status !== "rejected");
+    for (const draft of eligible) {
+      await api.rejectScoreDraft(decisionId, draft.id);
+    }
+    setSelectedDraftIds([]);
     await refreshEvidenceDrafts();
   };
 
@@ -254,8 +289,6 @@ export default function Scoring() {
                 className="h-7 w-20 text-xs"
                 aria-label="Draft score"
               />
-              <Button size="sm" variant="outline" onClick={() => handleEditDraft(draft)}>Edit</Button>
-              <Button size="sm" variant="outline" onClick={() => handleApproveDraft(draft)}>Approve</Button>
               <Button size="sm" variant="outline" onClick={() => handleApplyDraft(draft)}>Apply</Button>
               <Button size="sm" variant="ghost" onClick={() => handleRejectDraft(draft)}>Reject</Button>
             </div>
@@ -309,6 +342,30 @@ export default function Scoring() {
               Apply selected drafts
             </Button>
           </div>
+          {(pendingEvidenceCount > 0 || pendingDraftCount > 0) && (
+            <div className="flex flex-wrap gap-2 pt-2 border-t">
+              {pendingEvidenceCount > 0 && (
+                <>
+                  <Button size="sm" variant="outline" onClick={handleApproveAllEvidence}>
+                    Approve All Evidence ({pendingEvidenceCount})
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={handleRejectAllEvidence}>
+                    Reject All Evidence ({pendingEvidenceCount})
+                  </Button>
+                </>
+              )}
+              {pendingDraftCount > 0 && (
+                <>
+                  <Button size="sm" variant="outline" onClick={handleApplyAllDrafts}>
+                    Apply All Drafts ({pendingDraftCount})
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={handleRejectAllDrafts}>
+                    Reject All Drafts ({pendingDraftCount})
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

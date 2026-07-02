@@ -2894,7 +2894,8 @@ class TestEvidenceAndScoreDrafts:
                     {"activity_id": activity_id, "metric_id": metric_id, "suggested_score": 77, "evidence_ids": []}
                 ],
                 "metric_suggestions": [
-                    {"name": "Fit detail", "category": "Practical Fit", "description": "Extra local fit", "recommended_weight": 55}
+                    {"name": "Affordability", "category": "Resource Fit", "description": "", "recommended_weight": 80},
+                    {"name": "Feasibility", "category": "Practical Fit", "description": "", "recommended_weight": 70},
                 ],
             }
 
@@ -2916,7 +2917,8 @@ class TestEvidenceAndScoreDrafts:
         assert db.query(AlternativeScore).count() == 1
         suggestions = client.post(f"/api/decisions/{decision_id}/ai/suggest-metrics", json={})
         assert suggestions.status_code == 200
-        assert suggestions.json()["metric_suggestions"][0]["name"] == "Fit detail"
+        assert suggestions.json()["metric_suggestions"][0]["name"] == "Affordability"
+        assert suggestions.json()["metric_suggestions"][1]["recommended_weight"] == 70
 
     def test_malformed_ai_output_is_safe(self, client, monkeypatch):
         decision_id, _, _ = self._decision_cell(client)
@@ -2944,8 +2946,8 @@ class TestEvidenceAndScoreDrafts:
         def fake_ai(_prompt):
             return {
                 "metric_suggestions": [
-                    {"name": "Bad", "category": "Resource Fit", "recommended_weight": "heavy"},
-                    {"name": "Good", "category": "Resource Fit", "recommended_weight": 65},
+                    {"name": "Bad", "category": "Resource Fit", "recommended_weight": "heavy", "description": ""},
+                    {"name": "Affordability", "category": "Resource Fit", "recommended_weight": 65, "description": ""},
                 ],
                 "evidence_items": [
                     {"activity_id": activity_id, "metric_id": metric_id, "claim": "Bad confidence", "confidence": "high"},
@@ -2960,7 +2962,7 @@ class TestEvidenceAndScoreDrafts:
         monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_ai(prompt))
         suggestions = client.post(f"/api/decisions/{decision_id}/ai/suggest-metrics", json={})
         assert suggestions.status_code == 200
-        assert [item["name"] for item in suggestions.json()["metric_suggestions"]] == ["Good"]
+        assert [item["name"] for item in suggestions.json()["metric_suggestions"]] == ["Affordability"]
         evidence = client.post(f"/api/decisions/{decision_id}/ai/draft-evidence", json={})
         assert evidence.status_code == 201
         assert [item["claim"] for item in evidence.json()["evidence_items"]] == ["Good evidence"]

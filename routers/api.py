@@ -215,7 +215,12 @@ def _decision_activity_ids(decision_id: int, db: Session) -> set[int]:
 
 
 def _decision_metric_ids(decision_id: int, db: Session) -> set[int]:
-    return {dw.metric_id for dw in db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()}
+    dw_ids = {dw.metric_id for dw in db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).all()}
+    if dw_ids:
+        return dw_ids
+    # Fallback: include all metrics visible to this decision
+    from sqlalchemy import or_
+    return {m.id for m in db.query(Metric).filter(or_(Metric.decision_id == decision_id, Metric.decision_id.is_(None))).all()}
 
 
 def _optional_scoped_activity(value, decision_id: int, db: Session) -> int | None:
@@ -1390,6 +1395,7 @@ def _ai_call_or_error(prompt: str) -> dict:
 
 @router.post("/decisions/{decision_id}/ai/suggest-metrics")
 def ai_suggest_metrics(decision_id: int, body: dict, db: Session = Depends(get_db)):
+    """Ask AI to suggest new custom metrics relevant to this decision."""
     decision = _get_decision_or_404(decision_id, db)
     caps = get_ai_caps()
     max_suggestions = _validate_ai_max_field(body, "max_suggestions", caps["max_metric_suggestions"])
@@ -1397,7 +1403,7 @@ def ai_suggest_metrics(decision_id: int, body: dict, db: Session = Depends(get_d
     metrics = db.query(Metric).filter(Metric.id.in_(_decision_metric_ids(decision_id, db))).all()
     output = _ai_call_or_error(build_decision_context(
         decision, activities, metrics, body.get("user_context") or "",
-        instruction="Return a JSON object with a top-level key \"metric_suggestions\" containing an array of suggested criteria. Each item must have: name, category, description, why_it_matters, recommended_weight (0-100). Also include a top-level key \"questions_for_user\" (array of strings) if you need more context. Use \"metric_suggestions\" as the key name, not \"criteria\" or any other name.",
+        instruction='The "metrics" array above shows all existing criteria for this decision. Only suggest NEW criteria that do NOT already exist. If any existing metric fits the decision needs, do NOT suggest a duplicate — the user can already use it. Return a JSON object with a top-level key "metric_suggestions" containing an array of suggested criteria. Each item must have: name, category (one of: Resource Fit, Objective Fit, Time Fit, Assurance Fit, People Fit, Practical Fit), description, why_it_matters, recommended_weight (0-100). Also include a top-level key "questions_for_user" (array of strings) if you need more context. Use "metric_suggestions" as the key name.',
     ))
     suggestions = output.get("metric_suggestions", [])
     if not isinstance(suggestions, list):
@@ -1425,6 +1431,53 @@ def ai_suggest_metrics(decision_id: int, body: dict, db: Session = Depends(get_d
         except ValueError:
             continue
     return {"metric_suggestions": valid, "questions_for_user": output.get("questions_for_user", []) if isinstance(output.get("questions_for_user", []), list) else []}
+
+
+@router.post("/decisions/{decision_id}/ai/optimize-weights")
+def ai_optimize_weights(decision_id: int, body: dict, db: Session = Depends(get_db)):
+    """Ask AI to recommend weight adjustments for existing metrics."""
+    decision = _get_decision_or_404(decision_id, db)
+    caps = get_ai_caps()
+    max_items = _validate_ai_max_field(body, "max_suggestions", caps["max_metric_suggestions"])
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    metrics = db.query(Metric).filter(Metric.id.in_(_decision_metric_ids(decision_id, db))).all()
+    metrics_context = [{"name": m.name, "category": m.category, "description": m.description or ""} for m in metrics]
+    output = _ai_call_or_error(build_decision_context(
+        decision, activities, metrics, body.get("user_context") or "",
+        instruction=(
+            "You are given an existing set of universal decision criteria (metrics) below. "
+            "For this specific decision query, analyze which of these existing metrics are most relevant "
+            "and recommend a weight (0-100) for each. Higher weight = more important. "
+            "Do NOT invent new criteria — only use the metric names provided in the list below. "
+            'Return a JSON object with a top-level key "metric_recommendations" containing an array. '
+            "Each item must have: metric_name (exactly matching one of the provided metric names), "
+            "recommended_weight (0-100), and rationale (why this metric matters for this decision). "
+            'Also include a top-level key "questions_for_user" (array of strings) if you need more context.'
+        ),
+    ))
+    recommendations = output.get("metric_recommendations", [])
+    if not isinstance(recommendations, list):
+        raise HTTPException(status_code=502, detail="AI provider returned malformed output")
+    existing_names = {m["name"] for m in metrics_context}
+    valid = []
+    for item in recommendations[:max_items]:
+        try:
+            if not isinstance(item, dict):
+                raise ValueError("item is not an object")
+            name = item.get("metric_name")
+            if not isinstance(name, str) or name.strip() not in existing_names:
+                continue
+            weight = 50.0 if item.get("recommended_weight") is None else _provider_float(item.get("recommended_weight"), "recommended_weight")
+            if weight < 0 or weight > 100:
+                raise ValueError("recommended_weight must be between 0 and 100")
+            valid.append({
+                "metric_name": name.strip(),
+                "recommended_weight": weight,
+                "rationale": str(item.get("rationale") or "")[:1000],
+            })
+        except ValueError:
+            continue
+    return {"metric_recommendations": valid, "questions_for_user": output.get("questions_for_user", []) if isinstance(output.get("questions_for_user", []), list) else []}
 
 
 @router.post("/decisions/{decision_id}/ai/draft-evidence", status_code=201)
@@ -1494,15 +1547,19 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
     max_drafts = _validate_ai_max_field(body, "max_drafts", caps["max_score_drafts_per_request"])
     all_activity_ids = _decision_activity_ids(decision_id, db)
     all_metric_ids = _decision_metric_ids(decision_id, db)
+    if not all_activity_ids:
+        raise HTTPException(status_code=422, detail="No activities found for this decision")
+    if not all_metric_ids:
+        raise HTTPException(status_code=422, detail="No metrics found for this decision")
     allowed_activity_ids = _validate_ai_id_filter(body, "activity_ids", all_activity_ids)
     allowed_metric_ids = _validate_ai_id_filter(body, "metric_ids", all_metric_ids)
     evidence_policy = _enum_field(body.get("evidence_review_policy"), AI_EVIDENCE_REVIEW_POLICIES, "evidence_review_policy", "approved_and_pending")
     allowed_evidence_statuses = {"approved"} if evidence_policy == "approved_only" else {"approved", "pending"}
-    activities = db.query(Activity).filter(Activity.id.in_(allowed_activity_ids)).all() if allowed_activity_ids else []
-    metrics = db.query(Metric).filter(Metric.id.in_(allowed_metric_ids)).all() if allowed_metric_ids else []
+    activities = db.query(Activity).filter(Activity.id.in_(allowed_activity_ids)).all()
+    metrics = db.query(Metric).filter(Metric.id.in_(allowed_metric_ids)).all()
     output = _ai_call_or_error(build_decision_context(
         decision, activities, metrics, body.get("user_context") or "",
-        instruction="Return JSON only. Suggest scores (0-100) for each activity on each metric based on available evidence. Each score_draft must have: activity_id, metric_id, suggested_score (0-100), rationale, confidence (0-1), evidence_ids (list of applicable evidence item IDs). Include warnings if data is insufficient.",
+        instruction="Return JSON only. Use the EXACT activity_id and metric_id values from the decision context above. Suggest scores (0-100) for each activity on each metric based on available evidence. Each score_draft must have: activity_id (integer, must match one of the IDs provided above), metric_id (integer, must match one of the IDs provided above), suggested_score (0-100), rationale, confidence (0-1), evidence_ids (list of applicable evidence item IDs). Return an empty score_drafts array only if there is truly nothing to suggest.",
     ))
     raw_drafts = output.get("score_drafts", [])
     if not isinstance(raw_drafts, list):
@@ -1539,7 +1596,14 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
         except (HTTPException, ValueError) as exc:
             skipped.append({"reason": getattr(exc, "detail", str(exc))})
     if not created:
-        raise HTTPException(status_code=502, detail="AI provider returned no valid score drafts")
+        parts = ["AI provider returned no valid score drafts"]
+        if not raw_drafts:
+            parts.append("(AI returned an empty score_drafts array)")
+        else:
+            parts.append(f"({len(raw_drafts)} draft(s) attempted, {len(skipped)} rejected)")
+            if skipped:
+                parts.append(f"— first reason: {skipped[0]['reason']}")
+        raise HTTPException(status_code=502, detail=" ".join(parts))
     db.commit()
     return {"score_drafts": [_draft_serializer(draft, db) for draft in created], "warnings": output.get("warnings", []) if isinstance(output.get("warnings", []), list) else [], "skipped": skipped}
 

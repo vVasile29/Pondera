@@ -20,6 +20,7 @@ import type {
   EvidenceItem,
   ScoreDraft,
   AIMetricSuggestion,
+  AIMetricRecommendation,
   AIEvidenceResponse,
   AIScoreDraftResponse,
 } from "@/types";
@@ -165,6 +166,10 @@ export const api = {
 
   suggestMetricsWithAI(decisionId: number, data: { user_context?: string; max_suggestions?: number }): Promise<{ metric_suggestions: AIMetricSuggestion[]; questions_for_user: string[] }> {
     return request(`/decisions/${decisionId}/ai/suggest-metrics`, { method: "POST", body: JSON.stringify(data) });
+  },
+
+  optimizeWeightsWithAI(decisionId: number, data: { user_context?: string; max_suggestions?: number }): Promise<{ metric_recommendations: AIMetricRecommendation[]; questions_for_user: string[] }> {
+    return request(`/decisions/${decisionId}/ai/optimize-weights`, { method: "POST", body: JSON.stringify(data) });
   },
 
   draftEvidenceWithAI(decisionId: number, data: { user_context?: string; activity_ids?: number[]; metric_ids?: number[]; include_general_evidence?: boolean; max_items?: number }): Promise<AIEvidenceResponse> {

@@ -399,6 +399,12 @@ export interface AIMetricSuggestion {
   source: string;
 }
 
+export interface AIMetricRecommendation {
+  metric_name: string;
+  recommended_weight: number;
+  rationale: string;
+}
+
 export interface AIScoreDraftResponse {
   score_drafts: ScoreDraft[];
   warnings: string[];
