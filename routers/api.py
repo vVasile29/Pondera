@@ -93,6 +93,10 @@ def _validate_metric_name_not_reserved(name: str) -> None:
         )
 
 
+MAX_METRIC_NAME_LENGTH = 255
+MAX_METRIC_CATEGORY_LENGTH = 255
+
+
 def _build_decision_detail(decision_id: int, db: Session) -> dict:
     """Assemble the full decision detail JSON."""
     decision = db.query(Decision).filter(Decision.id == decision_id).first()
@@ -302,18 +306,17 @@ def decide(body: dict, db: Session = Depends(get_db)):
         )
         if existing:
             return
-        all_metrics = db.query(Metric).all()
-        metric_map = {m.name: m for m in all_metrics}
-        for m in UNIVERSAL_METRICS:
-            metric = metric_map.get(m["name"])
-            if metric:
-                db.add(
-                    DecisionWeight(
-                        decision_id=decision_id,
-                        metric_id=metric.id,
-                        weight=m["default_weight"],
-                    )
+        all_metrics = db.query(Metric).filter(Metric.decision_id.is_(None)).all()
+        default_weight_by_name = {m["name"]: m["default_weight"] for m in UNIVERSAL_METRICS}
+        for metric in all_metrics:
+            weight = default_weight_by_name.get(metric.name, 50)
+            db.add(
+                DecisionWeight(
+                    decision_id=decision_id,
+                    metric_id=metric.id,
+                    weight=weight,
                 )
+            )
 
     # ── Heuristic routing (auto-detect mode from query) ──
     parsed = parse_question(query)
@@ -845,7 +848,12 @@ def list_metrics(db: Session = Depends(get_db)):
     with a '(custom)' suffix from seed reconciliation) are filtered
     out so only one canonical row per built-in metric appears.
     """
-    all_metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
+    all_metrics = (
+        db.query(Metric)
+        .filter(Metric.decision_id.is_(None))
+        .order_by(Metric.category, Metric.name)
+        .all()
+    )
 
     grouped: dict[str, list] = {}
     for m in all_metrics:
@@ -863,6 +871,176 @@ def list_metrics(db: Session = Depends(get_db)):
     return {"grouped_metrics": grouped}
 
 
+def custom_metric_serializer(metric: Metric) -> dict:
+    """Serialize a custom metric using the scope-aware serializer."""
+    return serialize_metric_metadata(metric)
+
+
+@router.post("/decisions/{decision_id}/custom-metrics", status_code=201)
+def create_custom_metric(
+    decision_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    """Create a decision-scoped custom metric."""
+    decision = db.query(Decision).filter(Decision.id == decision_id).first()
+    if not decision:
+        raise HTTPException(status_code=404, detail="Decision not found")
+
+    name = body.get("name")
+    category = body.get("category")
+    description = body.get("description", "")
+
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=422, detail="Metric name is required")
+    if not isinstance(category, str) or not category.strip():
+        raise HTTPException(status_code=422, detail="Metric category is required")
+    if not isinstance(description, str):
+        description = ""
+
+    name = name.strip()
+    category = category.strip()
+
+    if len(name) > MAX_METRIC_NAME_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Metric name must not exceed {MAX_METRIC_NAME_LENGTH} characters"
+        )
+    if len(category) > MAX_METRIC_CATEGORY_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Category must not exceed {MAX_METRIC_CATEGORY_LENGTH} characters"
+        )
+
+    _validate_metric_name_not_reserved(name)
+
+    existing = (
+        db.query(Metric)
+        .filter(Metric.name == name, Metric.decision_id == decision_id)
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=422,
+            detail="A metric with this name already exists in this decision",
+        )
+
+    metric = Metric(
+        name=name,
+        category=category,
+        description=description,
+        scope="decision",
+        source="user",
+        decision_id=decision_id,
+    )
+    db.add(metric)
+    db.flush()
+
+    # Auto-create DecisionWeight with default weight 50
+    dw = DecisionWeight(
+        decision_id=decision_id,
+        metric_id=metric.id,
+        weight=50.0,
+    )
+    db.add(dw)
+    db.commit()
+    db.refresh(metric)
+
+    return custom_metric_serializer(metric)
+
+
+@router.put("/decisions/{decision_id}/custom-metrics/{metric_id}")
+def update_custom_metric(
+    decision_id: int,
+    metric_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+):
+    """Update a decision-scoped custom metric."""
+    metric = (
+        db.query(Metric)
+        .filter(
+            Metric.id == metric_id,
+            Metric.decision_id == decision_id,
+            Metric.scope == "decision",
+        )
+        .first()
+    )
+    if not metric:
+        raise HTTPException(status_code=404, detail="Custom metric not found")
+
+    name = body.get("name")
+    category = body.get("category")
+    description = body.get("description")
+
+    if name is not None:
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(status_code=422, detail="Metric name is required")
+        name = name.strip()
+        if len(name) > MAX_METRIC_NAME_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Metric name must not exceed {MAX_METRIC_NAME_LENGTH} characters"
+            )
+        _validate_metric_name_not_reserved(name)
+        if name != metric.name:
+            existing = (
+                db.query(Metric)
+                .filter(Metric.name == name, Metric.decision_id == decision_id)
+                .first()
+            )
+            if existing:
+                raise HTTPException(
+                    status_code=422,
+                    detail="A metric with this name already exists in this decision",
+                )
+        metric.name = name
+
+    if category is not None:
+        if not isinstance(category, str) or not category.strip():
+            raise HTTPException(status_code=422, detail="Metric category is required")
+        category = category.strip()
+        if len(category) > MAX_METRIC_CATEGORY_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Category must not exceed {MAX_METRIC_CATEGORY_LENGTH} characters"
+            )
+        metric.category = category
+
+    if description is not None:
+        if not isinstance(description, str):
+            description = ""
+        metric.description = description
+
+    db.commit()
+    db.refresh(metric)
+    return custom_metric_serializer(metric)
+
+
+@router.delete("/decisions/{decision_id}/custom-metrics/{metric_id}")
+def delete_custom_metric(
+    decision_id: int,
+    metric_id: int,
+    db: Session = Depends(get_db),
+):
+    """Delete a decision-scoped custom metric. FK cascade handles weights and scores."""
+    metric = (
+        db.query(Metric)
+        .filter(
+            Metric.id == metric_id,
+            Metric.decision_id == decision_id,
+            Metric.scope == "decision",
+        )
+        .first()
+    )
+    if not metric:
+        raise HTTPException(status_code=404, detail="Custom metric not found")
+
+    db.delete(metric)
+    db.commit()
+    return {"status": "deleted"}
+
+
 @router.post("/metrics", status_code=201)
 def create_metric(body: dict, db: Session = Depends(get_db)):
     name = body.get("name")
@@ -878,13 +1056,35 @@ def create_metric(body: dict, db: Session = Depends(get_db)):
 
     name = name.strip()
     category = category.strip()
+
+    if len(name) > MAX_METRIC_NAME_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Metric name must not exceed {MAX_METRIC_NAME_LENGTH} characters"
+        )
+    if len(category) > MAX_METRIC_CATEGORY_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Category must not exceed {MAX_METRIC_CATEGORY_LENGTH} characters"
+        )
+
     _validate_metric_name_not_reserved(name)
 
-    existing = db.query(Metric).filter(Metric.name == name).first()
+    existing = (
+        db.query(Metric)
+        .filter(Metric.name == name, Metric.decision_id.is_(None))
+        .first()
+    )
     if existing:
         raise HTTPException(status_code=422, detail="Metric with this name already exists")
 
-    metric = Metric(name=name, category=category, description=description)
+    metric = Metric(
+        name=name,
+        category=category,
+        description=description,
+        scope="global",
+        source="user",
+    )
     db.add(metric)
     db.commit()
     db.refresh(metric)
@@ -893,7 +1093,10 @@ def create_metric(body: dict, db: Session = Depends(get_db)):
 
 @router.put("/metrics/{metric_id}")
 def update_metric(metric_id: int, body: dict, db: Session = Depends(get_db)):
-    metric = db.query(Metric).filter(Metric.id == metric_id).first()
+    metric = db.query(Metric).filter(
+        Metric.id == metric_id,
+        Metric.decision_id.is_(None)
+    ).first()
     if not metric:
         raise HTTPException(status_code=404, detail="Metric not found")
 
@@ -905,9 +1108,18 @@ def update_metric(metric_id: int, body: dict, db: Session = Depends(get_db)):
         if not isinstance(name, str) or not name.strip():
             raise HTTPException(status_code=422, detail="Metric name is required")
         name = name.strip()
+        if len(name) > MAX_METRIC_NAME_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Metric name must not exceed {MAX_METRIC_NAME_LENGTH} characters"
+            )
         _validate_metric_name_not_reserved(name)
         if name != metric.name:
-            existing = db.query(Metric).filter(Metric.name == name).first()
+            existing = (
+                db.query(Metric)
+                .filter(Metric.name == name, Metric.decision_id.is_(None), Metric.id != metric_id)
+                .first()
+            )
             if existing:
                 raise HTTPException(status_code=422, detail="Metric with this name already exists")
         metric.name = name
@@ -915,7 +1127,13 @@ def update_metric(metric_id: int, body: dict, db: Session = Depends(get_db)):
     if category is not None:
         if not isinstance(category, str) or not category.strip():
             raise HTTPException(status_code=422, detail="Metric category is required")
-        metric.category = category.strip()
+        category = category.strip()
+        if len(category) > MAX_METRIC_CATEGORY_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Category must not exceed {MAX_METRIC_CATEGORY_LENGTH} characters"
+            )
+        metric.category = category
 
     if description is not None:
         if not isinstance(description, str):
@@ -929,7 +1147,10 @@ def update_metric(metric_id: int, body: dict, db: Session = Depends(get_db)):
 
 @router.delete("/metrics/{metric_id}")
 def delete_metric(metric_id: int, db: Session = Depends(get_db)):
-    metric = db.query(Metric).filter(Metric.id == metric_id).first()
+    metric = db.query(Metric).filter(
+        Metric.id == metric_id,
+        Metric.decision_id.is_(None)
+    ).first()
     if not metric:
         raise HTTPException(status_code=404, detail="Metric not found")
 

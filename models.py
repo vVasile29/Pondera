@@ -74,8 +74,14 @@ class Metric(Base):
     name = Column(String, index=True, nullable=False)
     category = Column(String, nullable=False)
     description = Column(String, nullable=True)
-
-    __table_args__ = (UniqueConstraint("name", name="uq_metric_name"),)
+    decision_id = Column(
+        Integer,
+        ForeignKey("decisions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    scope = Column(String, nullable=False, default="global")
+    source = Column(String, nullable=False, default="template")
 
     def __repr__(self):
         return f"<Metric(id={self.id}, name={self.name!r}, category={self.category!r})>"

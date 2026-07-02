@@ -1,4 +1,6 @@
 import type {
+  CreateCustomMetricPayload,
+  CustomMetricResponse,
   DecideResponse,
   DecisionDetail,
   DecisionListResponse,
@@ -115,6 +117,39 @@ export const api = {
   deleteDecision(id: number): Promise<DeleteResponse> {
     return request(`/decisions/${id}/delete`, {
       method: "POST",
+    });
+  },
+
+  /** Create a decision-scoped custom metric. */
+  createCustomMetric(
+    decisionId: number,
+    data: CreateCustomMetricPayload,
+  ): Promise<CustomMetricResponse> {
+    return request(`/decisions/${decisionId}/custom-metrics`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** Update a decision-scoped custom metric. */
+  updateCustomMetric(
+    decisionId: number,
+    metricId: number,
+    data: Partial<CreateCustomMetricPayload>,
+  ): Promise<CustomMetricResponse> {
+    return request(`/decisions/${decisionId}/custom-metrics/${metricId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** Delete a decision-scoped custom metric. */
+  deleteCustomMetric(
+    decisionId: number,
+    metricId: number,
+  ): Promise<{ status: string }> {
+    return request(`/decisions/${decisionId}/custom-metrics/${metricId}`, {
+      method: "DELETE",
     });
   },
 };

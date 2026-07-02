@@ -150,7 +150,14 @@ export default function Scoring() {
             >
               {/* Row header — metric info */}
               <div className="p-3 flex flex-col justify-center min-w-0">
-                <span className="text-sm font-medium truncate">{metric.name}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium truncate">{metric.name}</span>
+                  {metric.scope === "decision" && (
+                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+                      Custom
+                    </span>
+                  )}
+                </div>
                 <span className="text-xs text-muted-foreground truncate">
                   {metric.description}
                 </span>
@@ -209,7 +216,14 @@ export default function Scoring() {
                 return (
                   <div key={`${act.id}_${metric.id}`} className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium truncate">{metric.name}</span>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-sm font-medium truncate">{metric.name}</span>
+                        {metric.scope === "decision" && (
+                          <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+                            Custom
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <span
                           className={`text-sm font-mono tabular-nums ${scoreColor(val)}`}

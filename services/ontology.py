@@ -270,6 +270,21 @@ def ontology_metric_metadata(name: str) -> dict | None:
 
 
 def serialize_metric_metadata(metric) -> dict:
+    # Decision-scoped custom metrics: skip ontology lookup
+    if getattr(metric, "decision_id", None) is not None:
+        return {
+            "id": metric.id,
+            "stable_id": None,
+            "name": metric.name,
+            "category": metric.category,
+            "category_id": None,
+            "description": metric.description or "",
+            "question": metric.description or "",
+            "anchors": None,
+            "scope": metric.scope,
+            "source": metric.source,
+            "decision_id": metric.decision_id,
+        }
     metadata = ontology_metric_metadata(metric.name)
     if not metadata:
         return {
@@ -281,6 +296,9 @@ def serialize_metric_metadata(metric) -> dict:
             "description": metric.description or "",
             "question": metric.description or "",
             "anchors": None,
+            "scope": "global",
+            "source": "template",
+            "decision_id": None,
         }
     return {
         "id": metric.id,
@@ -295,6 +313,9 @@ def serialize_metric_metadata(metric) -> dict:
             "mid": metadata["mid_anchor"],
             "high": metadata["high_anchor"],
         },
+        "scope": "global",
+        "source": "template",
+        "decision_id": None,
     }
 
 

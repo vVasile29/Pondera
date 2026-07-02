@@ -27,12 +27,17 @@ def reconcile_seed_metrics(db) -> None:
     from models import Metric
     from services.ontology import OLD_TO_NEW_METRIC_NAMES, UNIVERSAL_DIMENSIONS
 
-    existing_by_name = {m.name: m for m in db.query(Metric).all()}
+    existing_by_name = {
+        m.name: m
+        for m in db.query(Metric).filter(Metric.decision_id.is_(None)).all()
+    }
     existing_names = set(existing_by_name)
 
     def refresh_name_map() -> None:
         existing_by_name.clear()
-        existing_by_name.update({m.name: m for m in db.query(Metric).all()})
+        existing_by_name.update(
+            {m.name: m for m in db.query(Metric).filter(Metric.decision_id.is_(None)).all()}
+        )
         existing_names.clear()
         existing_names.update(existing_by_name)
 

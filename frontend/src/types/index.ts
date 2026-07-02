@@ -26,6 +26,9 @@ export interface Metric {
     mid: string;
     high: string;
   } | null;
+  scope?: "global" | "decision";
+  source?: "template" | "user" | "llm";
+  decision_id?: number | null;
 }
 
 // ── Scoring ──
@@ -261,6 +264,28 @@ export interface MetricCRUDResponse {
   description: string;
 }
 
+// ── Custom Metric types ──
+
+export interface CreateCustomMetricPayload {
+  name: string;
+  category: string;
+  description?: string;
+}
+
+export interface CustomMetricResponse {
+  id: number;
+  name: string;
+  category: string;
+  description: string;
+  scope: "decision";
+  source: "user";
+  decision_id: number;
+  stable_id: null;
+  category_id: null;
+  question: string;
+  anchors: null;
+}
+
 // ── API request payload types ──
 
 export interface DecideResponse {
@@ -279,11 +304,8 @@ export interface RefinePayload {
 
 export interface RefineResponse {
   activities: Activity[];
-  criteria: Array<{
-    id: number;
-    name: string;
-    weight: number;
-  }>;
+  criteria: Array<Metric & { weight: number }>;
+  ko_criteria: KoCriterion[];
 }
 
 export interface ScorePayload {

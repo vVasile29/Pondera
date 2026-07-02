@@ -2081,3 +2081,699 @@ class TestMetricsCrud:
         assert db.query(DecisionWeight).filter(DecisionWeight.metric_id == metric_id).count() == 0
         assert db.query(AlternativeScore).filter(AlternativeScore.metric_id == metric_id).count() == 0
         assert db.query(MetricModel).filter(MetricModel.id == metric_id).count() == 0
+
+
+class TestCustomMetrics:
+    """Coverage for decision-scoped custom metrics CRUD, refine, scoring, and export."""
+
+    def test_create_custom_metric_success(self, client, db):
+        """POST /api/decisions/{id}/custom-metrics → scope=decision, source=user, auto-weight=50."""
+        from models import DecisionWeight
+
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        resp = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "My Metric", "category": "Resource Fit", "description": "Custom desc"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["scope"] == "decision"
+        assert data["source"] == "user"
+        assert data["decision_id"] == dec_id
+        assert data["stable_id"] is None
+        assert data["anchors"] is None
+        assert data["name"] == "My Metric"
+        assert data["category"] == "Resource Fit"
+        assert data["description"] == "Custom desc"
+        assert isinstance(data["id"], int)
+
+        # Auto-weight should be 50
+        dw = db.query(DecisionWeight).filter(
+            DecisionWeight.decision_id == dec_id,
+            DecisionWeight.metric_id == data["id"],
+        ).first()
+        assert dw is not None
+        assert dw.weight == 50
+
+    def test_create_custom_metric_duplicate_name_same_decision(self, client, db):
+        """Same name within same decision → 422."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Dup", "category": "Resource Fit"},
+        )
+        resp = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Dup", "category": "Objective Fit"},
+        )
+        assert resp.status_code == 422
+        assert "already exists" in resp.json()["detail"]
+
+    def test_create_custom_metric_same_name_different_decision(self, client, db):
+        """Same name in different decisions → both 201."""
+        d1 = client.post("/api/decide", json={"q": "First"})
+        d2 = client.post("/api/decide", json={"q": "Second"})
+        id1 = d1.json()["decision_id"]
+        id2 = d2.json()["decision_id"]
+
+        r1 = client.post(
+            f"/api/decisions/{id1}/custom-metrics",
+            json={"name": "Shared", "category": "Resource Fit"},
+        )
+        r2 = client.post(
+            f"/api/decisions/{id2}/custom-metrics",
+            json={"name": "Shared", "category": "Objective Fit"},
+        )
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+        assert r1.json()["name"] == "Shared"
+        assert r2.json()["name"] == "Shared"
+
+    def test_create_custom_metric_same_name_as_global(self, client, db):
+        """Same name as a global ontology metric → 201 (allowed)."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        # "Affordability" is a global ontology metric
+        resp = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Affordability", "category": "Resource Fit", "description": "Custom Affordability"},
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "Affordability"
+        assert data["scope"] == "decision"
+        assert data["stable_id"] is None  # scope-aware: no ontology metadata
+
+    def test_create_custom_metric_missing_name(self, client, db):
+        """Missing name → 422."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        resp = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"category": "Resource Fit"},
+        )
+        assert resp.status_code == 422
+        assert "name is required" in resp.json()["detail"].lower()
+
+    def test_create_custom_metric_reserved_legacy_name(self, client, db):
+        """Reserved legacy name 'Cost' → 422."""
+        assert "Cost" in RESERVED_LEGACY_METRIC_NAMES
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        resp = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Cost", "category": "Resource Fit"},
+        )
+        assert resp.status_code == 422
+        assert "reserved" in resp.json()["detail"].lower()
+
+    def test_create_custom_metric_unknown_decision(self, client, db):
+        """Non-existent decision → 404."""
+        resp = client.post(
+            "/api/decisions/99999/custom-metrics",
+            json={"name": "Test", "category": "Resource Fit"},
+        )
+        assert resp.status_code == 404
+
+    def test_update_custom_metric_success(self, client, db):
+        """PUT /api/decisions/{id}/custom-metrics/{mid} → 200."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Original", "category": "Resource Fit", "description": "Original desc"},
+        )
+        metric_id = create.json()["id"]
+
+        update = client.put(
+            f"/api/decisions/{dec_id}/custom-metrics/{metric_id}",
+            json={"name": "Updated", "category": "Objective Fit", "description": "Updated desc"},
+        )
+        assert update.status_code == 200
+        data = update.json()
+        assert data["name"] == "Updated"
+        assert data["category"] == "Objective Fit"
+        assert data["description"] == "Updated desc"
+        assert data["scope"] == "decision"
+        assert data["stable_id"] is None
+
+    def test_update_custom_metric_not_found(self, client, db):
+        """Update non-existent metric → 404."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        resp = client.put(
+            f"/api/decisions/{dec_id}/custom-metrics/99999",
+            json={"name": "Nope", "category": "Resource Fit"},
+        )
+        assert resp.status_code == 404
+
+    def test_delete_custom_metric_success(self, client, db):
+        """DELETE custom metric → 200, verify DecisionWeight cascade."""
+        from models import DecisionWeight
+
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Delete Me", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # Verify weight exists
+        assert db.query(DecisionWeight).filter(
+            DecisionWeight.metric_id == metric_id,
+            DecisionWeight.decision_id == dec_id,
+        ).count() == 1
+
+        resp = client.delete(f"/api/decisions/{dec_id}/custom-metrics/{metric_id}")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "deleted"}
+
+        # Verify Metric row deleted
+        assert db.query(Metric).filter(Metric.id == metric_id).count() == 0
+        # Verify DecisionWeight cascade deleted
+        assert db.query(DecisionWeight).filter(
+            DecisionWeight.metric_id == metric_id,
+        ).count() == 0
+
+    def test_delete_decision_removes_custom_metrics(self, client, db):
+        """Deleting a decision cascades to its custom Metric rows."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Custom Metric", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # Delete the decision
+        resp = client.post(f"/api/decisions/{dec_id}/delete")
+        assert resp.status_code == 200
+
+        # Custom Metric should be gone
+        assert db.query(Metric).filter(Metric.id == metric_id).count() == 0
+
+    def test_refine_with_custom_metric_weight(self, client, db):
+        """Refine with custom metric weight preserves DecisionWeight."""
+        from models import DecisionWeight
+
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Custom", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # Refine with custom metric weight
+        resp = client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["A", "B"],
+                "metrics": [
+                    {"metric_id": metric_id, "weight": 75},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+
+        # Verify weight preserved
+        dw = db.query(DecisionWeight).filter(
+            DecisionWeight.decision_id == dec_id,
+            DecisionWeight.metric_id == metric_id,
+        ).first()
+        assert dw is not None
+        assert dw.weight == 75
+
+    def test_refine_omits_custom_metric_weight(self, client, db):
+        """Refine without custom metric weight → DecisionWeight deleted."""
+        from models import DecisionWeight
+
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Custom", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # First refine with it
+        client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["A", "B"],
+                "metrics": [{"metric_id": metric_id, "weight": 50}],
+            },
+        )
+
+        # Second refine without it
+        # Get a global metric to include instead
+        global_metric = db.query(Metric).filter(Metric.decision_id.is_(None)).first()
+        resp = client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["A", "B"],
+                "metrics": [{"metric_id": global_metric.id, "weight": 80}],
+            },
+        )
+        assert resp.status_code == 200
+
+        # Custom metric DecisionWeight should be gone
+        assert db.query(DecisionWeight).filter(
+            DecisionWeight.decision_id == dec_id,
+            DecisionWeight.metric_id == metric_id,
+        ).count() == 0
+
+    def test_custom_metric_named_like_builtin_returns_none_ontology(self, client, db):
+        """Custom metric named 'Affordability' → stable_id=None, anchors=None in detail."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Affordability", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # Refine to add it
+        client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["A", "B"],
+                "metrics": [{"metric_id": metric_id, "weight": 50}],
+            },
+        )
+
+        # Get decision detail
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        custom_metrics = [m for m in detail["metrics"] if m["id"] == metric_id]
+        assert len(custom_metrics) == 1
+        cm = custom_metrics[0]
+        assert cm["stable_id"] is None
+        assert cm["anchors"] is None
+        assert cm["category_id"] is None
+        assert cm["name"] == "Affordability"
+        assert cm["scope"] == "decision"
+
+    def test_list_metrics_global_only(self, client, db):
+        """GET /api/metrics excludes decision-scoped custom metrics."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Secret Custom", "category": "Resource Fit"},
+        )
+
+        # Global list should not include it
+        resp = client.get("/api/metrics")
+        data = resp.json()
+        all_names = [
+            m["name"] for group in data["grouped_metrics"].values() for m in group
+        ]
+        assert "Secret Custom" not in all_names
+
+    def test_decision_detail_includes_custom_metrics(self, client, db):
+        """Decision detail includes custom metrics in the metrics array."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Custom Detail", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # Refine to add it
+        client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["A", "B"],
+                "metrics": [{"metric_id": metric_id, "weight": 60}],
+            },
+        )
+
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        metric_ids = [m["id"] for m in detail["metrics"]]
+        assert metric_id in metric_ids
+
+        cm = next(m for m in detail["metrics"] if m["id"] == metric_id)
+        assert cm["scope"] == "decision"
+        assert cm["source"] == "user"
+        assert cm["decision_id"] == dec_id
+
+    def test_scoring_with_custom_metric(self, client, db):
+        """Score a custom metric and verify correct fit score."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Custom Score", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # Refine with it
+        client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["Option A", "Option B"],
+                "metrics": [{"metric_id": metric_id, "weight": 100}],
+            },
+        )
+
+        # Score
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        act_ids = [a["id"] for a in detail["activities"]]
+        score_resp = client.post(
+            f"/api/decisions/{dec_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": act_ids[0], "metric_id": metric_id, "score": 80},
+                    {"activity_id": act_ids[1], "metric_id": metric_id, "score": 40},
+                ],
+            },
+        )
+        assert score_resp.status_code == 200
+        score_data = score_resp.json()
+
+        # With only one metric at weight 100, fit_score = score / 100
+        results = score_data["results"]
+        assert len(results) == 2
+        for r in results:
+            if r["activity_id"] == act_ids[0]:
+                assert r["fit_score"] == 0.8  # 80 / 100
+            else:
+                assert r["fit_score"] == 0.4  # 40 / 100
+
+    def test_export_with_custom_metrics(self, client, db):
+        """Markdown export includes custom metric rows."""
+        decide = client.post("/api/decide", json={"q": "Pick one"})
+        dec_id = decide.json()["decision_id"]
+
+        create = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Custom Export", "category": "Resource Fit"},
+        )
+        metric_id = create.json()["id"]
+
+        # Refine with it
+        client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["A", "B"],
+                "metrics": [{"metric_id": metric_id, "weight": 50}],
+            },
+        )
+
+        # Score
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        act_ids = [a["id"] for a in detail["activities"]]
+        client.post(
+            f"/api/decisions/{dec_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": act_ids[0], "metric_id": metric_id, "score": 90},
+                    {"activity_id": act_ids[1], "metric_id": metric_id, "score": 60},
+                ],
+            },
+        )
+
+        # Export
+        export = client.get(f"/api/decisions/{dec_id}/export-markdown")
+        assert export.status_code == 200
+        content = export.text
+        assert "Custom Export" in content
+        assert "50.0" in content  # weight value
+        assert "90.0" in content  # score for A
+        assert "60.0" in content  # score for B
+
+
+class TestUserCreatedGlobalMetrics:
+    """User-created global metrics (from MetricsManager) should appear in new decisions."""
+
+    def test_user_created_global_metric_appears_in_new_decision(self, client, db):
+        """Create a global metric, then create a decision — metric should be seeded."""
+        # Create a global metric via MetricsManager
+        create = client.post(
+            "/api/metrics",
+            json={"name": "My Custom Global", "category": "Resource Fit", "description": "User-made"},
+        )
+        assert create.status_code == 201
+        metric_id = create.json()["id"]
+
+        # Create a new decision
+        decide = client.post("/api/decide", json={"q": "Should I do X or Y?"})
+        assert decide.status_code == 200
+        dec_id = decide.json()["decision_id"]
+
+        # Decision detail should include the user-created global metric
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        metric_ids = [m["id"] for m in detail["metrics"]]
+        assert metric_id in metric_ids, f"User-created global metric {metric_id} not found in decision {dec_id} metrics: {metric_ids}"
+
+        # It should also have a DecisionWeight
+        from models import DecisionWeight
+        dw = db.query(DecisionWeight).filter(
+            DecisionWeight.decision_id == dec_id,
+            DecisionWeight.metric_id == metric_id,
+        ).first()
+        assert dw is not None, "User-created global metric should have a DecisionWeight"
+        assert dw.weight == 50, "User-created global metric should default to weight 50"
+
+    def test_multiple_user_created_global_metrics_all_seeded(self, client, db):
+        """Multiple user-created global metrics all appear in new decisions."""
+        ids = []
+        for name in ["Alpha Metric", "Beta Metric", "Gamma Metric"]:
+            r = client.post("/api/metrics", json={"name": name, "category": "Objective Fit"})
+            assert r.status_code == 201
+            ids.append(r.json()["id"])
+
+        decide = client.post("/api/decide", json={"q": "Pick A, B, or C"})
+        dec_id = decide.json()["decision_id"]
+
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        detail_metric_ids = {m["id"] for m in detail["metrics"]}
+        for mid in ids:
+            assert mid in detail_metric_ids, f"Metric {mid} missing from decision metrics"
+
+    def test_user_created_global_metric_does_not_break_builtin_metrics(self, client, db):
+        """Built-in metrics still get seeded alongside user-created ones."""
+        from services.ontology import UNIVERSAL_METRICS
+
+        client.post("/api/metrics", json={"name": "Side Metric", "category": "People Fit"})
+
+        decide = client.post("/api/decide", json={"q": "House vs Apartment"})
+        dec_id = decide.json()["decision_id"]
+
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        metric_names = {m["name"] for m in detail["metrics"]}
+
+        # All built-in metrics should still be present
+        for builtin in UNIVERSAL_METRICS:
+            assert builtin["name"] in metric_names, f"Built-in metric '{builtin['name']}' missing"
+
+        # Plus the user-created one
+        assert "Side Metric" in metric_names
+
+
+class TestKOCriteriaOnCustomMetrics:
+    """KO criteria should work on custom metrics just like global metrics."""
+
+    def test_set_ko_on_custom_metric_via_refine(self, client, db):
+        """KO criteria can be set on a custom metric through the refine endpoint."""
+        decide = client.post("/api/decide", json={"q": "Option A vs Option B"})
+        dec_id = decide.json()["decision_id"]
+
+        # Create a custom metric
+        cm = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "My Custom", "category": "Resource Fit"},
+        ).json()
+        cm_id = cm["id"]
+
+        # Refine with custom metric + KO criteria
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        act_names = [a["name"] for a in detail["activities"]]
+        global_metric_id = detail["metrics"][0]["id"]
+
+        refine = client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": act_names,
+                "metrics": [
+                    {"metric_id": global_metric_id, "weight": 80},
+                    {"metric_id": cm_id, "weight": 60},
+                ],
+                "ko_criteria": [
+                    {"metric_id": cm_id, "ko_operator": ">=", "ko_value": 50},
+                ],
+            },
+        )
+        assert refine.status_code == 200
+
+        # Verify KO criteria stored on decision
+        import json
+        from models import Decision
+        decision = db.query(Decision).filter(Decision.id == dec_id).first()
+        assert decision.ko_criteria is not None
+        stored_ko = json.loads(decision.ko_criteria)
+        assert any(kc["metric_id"] == cm_id for kc in stored_ko)
+
+    def test_ko_thresholds_on_custom_metric_survive_score_and_results(self, client, db):
+        """KO criteria on custom metrics are evaluated during scoring."""
+        decide = client.post("/api/decide", json={"q": "X vs Y"})
+        dec_id = decide.json()["decision_id"]
+
+        # Create custom metric
+        cm = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Knockout Metric", "category": "Assurance Fit"},
+        ).json()
+        cm_id = cm["id"]
+
+        # Refine with custom metric + KO
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        act_names = [a["name"] for a in detail["activities"]]
+        global_mid = detail["metrics"][0]["id"]
+
+        refine = client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": act_names,
+                "metrics": [
+                    {"metric_id": global_mid, "weight": 50},
+                    {"metric_id": cm_id, "weight": 50},
+                ],
+                "ko_criteria": [
+                    {"metric_id": cm_id, "ko_operator": ">=", "ko_value": 70},
+                ],
+            },
+        )
+        assert refine.status_code == 200
+        refined = refine.json()
+
+        # Get activity IDs
+        detail2 = client.get(f"/api/decisions/{dec_id}").json()
+        act_ids = [a["id"] for a in detail2["activities"]]
+
+        # Score — first activity scores high on custom (passes KO), second scores low (fails KO)
+        score_resp = client.post(
+            f"/api/decisions/{dec_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": act_ids[0], "metric_id": global_mid, "score": 50},
+                    {"activity_id": act_ids[0], "metric_id": cm_id, "score": 90},
+                    {"activity_id": act_ids[1], "metric_id": global_mid, "score": 50},
+                    {"activity_id": act_ids[1], "metric_id": cm_id, "score": 30},
+                ],
+            },
+        )
+        assert score_resp.status_code == 200
+
+        # Results should include KO result
+        result = client.get(f"/api/decisions/{dec_id}").json()
+        assert result.get("ko_result") is not None
+        # Activity with score 30 on a >=70 KO should be knocked_out
+        ko_result = result["ko_result"]
+        if isinstance(ko_result, str):
+            import json
+            ko_result = json.loads(ko_result)
+        ko_results_list = ko_result.get("results", []) if isinstance(ko_result, dict) else ko_result
+        knocked_out = [r for r in ko_results_list if isinstance(r, dict) and r.get("status") == "knocked_out"]
+        assert len(knocked_out) >= 1, f"Expected at least 1 knocked_out activity, got: {ko_result}"
+
+    def test_ko_on_custom_metric_removed_when_metric_excluded_via_refine(self, client, db):
+        """KO criteria for a custom metric are cleaned up when the metric is omitted from refine."""
+        decide = client.post("/api/decide", json={"q": "Red vs Blue"})
+        dec_id = decide.json()["decision_id"]
+
+        cm = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Temporary", "category": "Time Fit"},
+        ).json()
+        cm_id = cm["id"]
+
+        # First refine with the custom metric and KO
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        global_mid = detail["metrics"][0]["id"]
+
+        client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["Red", "Blue"],
+                "metrics": [
+                    {"metric_id": global_mid, "weight": 50},
+                    {"metric_id": cm_id, "weight": 50},
+                ],
+                "ko_criteria": [
+                    {"metric_id": cm_id, "ko_operator": ">=", "ko_value": 50},
+                ],
+            },
+        )
+
+        # Second refine WITHOUT the custom metric — KO should be gone
+        refine2 = client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["Red", "Blue"],
+                "metrics": [
+                    {"metric_id": global_mid, "weight": 80},
+                ],
+                "ko_criteria": [],  # explicitly clear KO criteria
+            },
+        )
+        assert refine2.status_code == 200
+
+        import json
+        from models import Decision
+        decision = db.query(Decision).filter(Decision.id == dec_id).first()
+        if decision.ko_criteria:
+            stored_ko = json.loads(decision.ko_criteria)
+            assert all(kc["metric_id"] != cm_id for kc in stored_ko), \
+                "KO criteria for omitted custom metric should not persist"
+
+
+class TestMetricLimitWithCustomMetrics:
+    """MAX_DECISION_METRICS should accommodate both global and custom metrics."""
+
+    def test_decision_with_global_and_custom_metrics_under_limit(self, client, db):
+        """Refine with 12 global + custom metrics should pass the 20 metric limit."""
+        decide = client.post("/api/decide", json={"q": "Option A vs Option B"})
+        dec_id = decide.json()["decision_id"]
+
+        # Get the auto-seeded global metrics
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        global_metrics = detail["metrics"]
+
+        # Add a custom metric
+        cm = client.post(
+            f"/api/decisions/{dec_id}/custom-metrics",
+            json={"name": "Extra Metric", "category": "Resource Fit"},
+        ).json()
+
+        # Refine with all global metrics + the custom metric (13 total, under limit of 20)
+        metrics_payload = [{"metric_id": m["id"], "weight": 50} for m in global_metrics]
+        metrics_payload.append({"metric_id": cm["id"], "weight": 50})
+
+        refine = client.post(
+            f"/api/decisions/{dec_id}/refine",
+            json={
+                "alternatives": ["Option A", "Option B"],
+                "metrics": metrics_payload,
+            },
+        )
+        assert refine.status_code == 200, f"Expected 200, got {refine.status_code}: {refine.text}"
