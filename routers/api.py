@@ -223,6 +223,30 @@ def _decision_metric_ids(decision_id: int, db: Session) -> set[int]:
     return {m.id for m in db.query(Metric).filter(or_(Metric.decision_id == decision_id, Metric.decision_id.is_(None))).all()}
 
 
+def _expected_score_pairs(activity_ids: set[int], metric_ids: set[int]) -> set[tuple[int, int]]:
+    return {(activity_id, metric_id) for activity_id in activity_ids for metric_id in metric_ids}
+
+
+def _missing_score_detail(
+    missing_pairs: set[tuple[int, int]],
+    activities_by_id: dict[int, Activity],
+    metrics_by_id: dict[int, Metric],
+) -> dict:
+    missing_scores = [
+        {
+            "activity_id": activity_id,
+            "activity_name": activities_by_id.get(activity_id).name if activities_by_id.get(activity_id) else None,
+            "metric_id": metric_id,
+            "metric_name": metrics_by_id.get(metric_id).name if metrics_by_id.get(metric_id) else None,
+        }
+        for activity_id, metric_id in sorted(missing_pairs)
+    ]
+    return {
+        "message": f"Missing scores for {len(missing_scores)} activity/metric pair(s)",
+        "missing_scores": missing_scores,
+    }
+
+
 def _optional_scoped_activity(value, decision_id: int, db: Session) -> int | None:
     if value is None:
         return None
@@ -346,6 +370,35 @@ def _set_ai_draft_evidence(
             raise ValueError("Evidence metric scope does not match draft")
         db.add(ScoreDraftEvidence(score_draft_id=draft.id, evidence_item_id=evidence_id))
         seen.add(evidence_id)
+
+
+def _validate_ai_draft_evidence_ids(
+    decision_id: int,
+    activity_id: int,
+    metric_id: int,
+    evidence_ids: list,
+    allowed_evidence_statuses: set[str],
+    db: Session,
+) -> list[int]:
+    if not isinstance(evidence_ids, list):
+        raise ValueError("evidence_ids must be a list")
+    result = []
+    seen = set()
+    for evidence_id in evidence_ids:
+        if not isinstance(evidence_id, int) or isinstance(evidence_id, bool):
+            raise ValueError("evidence_ids must contain integers")
+        if evidence_id in seen:
+            continue
+        evidence = _get_evidence_or_404(decision_id, evidence_id, db)
+        if evidence.review_status not in allowed_evidence_statuses:
+            raise ValueError("Evidence review status is not allowed by evidence_review_policy")
+        if evidence.activity_id is not None and evidence.activity_id != activity_id:
+            raise ValueError("Evidence activity scope does not match draft")
+        if evidence.metric_id is not None and evidence.metric_id != metric_id:
+            raise ValueError("Evidence metric scope does not match draft")
+        result.append(evidence_id)
+        seen.add(evidence_id)
+    return result
 
 
 def _apply_draft(draft: ScoreDraft, db: Session) -> AlternativeScore:
@@ -890,6 +943,16 @@ def score_decision(
         .filter(DecisionWeight.decision_id == decision_id)
         .all()
     }
+    if not activity_ids:
+        raise HTTPException(status_code=422, detail="No activities found for this decision")
+    if not selected_metric_ids:
+        raise HTTPException(status_code=422, detail="No selected metrics found for this decision")
+    activities_by_id = {activity.id: activity for activity in activities}
+    metrics_by_id = {
+        metric.id: metric
+        for metric in db.query(Metric).filter(Metric.id.in_(selected_metric_ids)).all()
+    }
+    expected_pairs = _expected_score_pairs(activity_ids, selected_metric_ids)
 
     validated_scores = []
     seen_scores = set()
@@ -923,6 +986,13 @@ def score_decision(
         seen_scores.add(score_key)
         validated_scores.append(
             {"activity_id": activity_id, "metric_id": metric_id, "score": score}
+        )
+
+    missing_pairs = expected_pairs - seen_scores
+    if missing_pairs:
+        raise HTTPException(
+            status_code=422,
+            detail=_missing_score_detail(missing_pairs, activities_by_id, metrics_by_id),
         )
 
     for activity in activities:
@@ -1484,17 +1554,28 @@ def ai_optimize_weights(decision_id: int, body: dict, db: Session = Depends(get_
 def ai_draft_evidence(decision_id: int, body: dict, db: Session = Depends(get_db)):
     decision = _get_decision_or_404(decision_id, db)
     caps = get_ai_caps()
-    max_items = _validate_ai_max_field(body, "max_items", caps["max_evidence_items_per_request"])
     all_activity_ids = _decision_activity_ids(decision_id, db)
     all_metric_ids = _decision_metric_ids(decision_id, db)
     allowed_activity_ids = _validate_ai_id_filter(body, "activity_ids", all_activity_ids)
     allowed_metric_ids = _validate_ai_id_filter(body, "metric_ids", all_metric_ids)
     include_general = _validate_ai_bool_field(body, "include_general_evidence", True)
+    expected_pairs = _expected_score_pairs(allowed_activity_ids, allowed_metric_ids)
+    max_items_cap = max(caps["max_evidence_items_per_request"], len(expected_pairs) or 1)
+    max_items = _validate_ai_max_field(body, "max_items", max_items_cap)
+    if expected_pairs:
+        max_items = max(max_items, len(expected_pairs))
     activities = db.query(Activity).filter(Activity.id.in_(allowed_activity_ids)).all() if allowed_activity_ids else []
     metrics = db.query(Metric).filter(Metric.id.in_(allowed_metric_ids)).all() if allowed_metric_ids else []
     output = _ai_call_or_error(build_decision_context(
         decision, activities, metrics, body.get("user_context") or "",
-        instruction="Return JSON only. Draft evidence items (claims with supporting rationale) for scoring the given alternatives on the given metrics. Each evidence_item must have: activity_id, metric_id, claim, rationale, confidence (0-1), polarity (positive/negative/neutral/mixed). Include missing_context_questions if you need more context.",
+        instruction=(
+            "Return JSON only. Draft evidence items (claims with supporting rationale) for scoring the given "
+            "alternatives on the given metrics. Use the EXACT activity_id and metric_id values from the "
+            "decision context above. When specific activities and metrics are provided, include at least one "
+            "evidence_item for every requested activity/metric pair. Each evidence_item must have: activity_id, "
+            "metric_id, claim, rationale, confidence (0-1), polarity (positive/negative/neutral/mixed). "
+            "Include missing_context_questions if you need more context."
+        ),
     ))
     items = output.get("evidence_items", [])
     if not isinstance(items, list):
@@ -1544,7 +1625,6 @@ def ai_draft_evidence(decision_id: int, body: dict, db: Session = Depends(get_db
 def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db)):
     decision = _get_decision_or_404(decision_id, db)
     caps = get_ai_caps()
-    max_drafts = _validate_ai_max_field(body, "max_drafts", caps["max_score_drafts_per_request"])
     all_activity_ids = _decision_activity_ids(decision_id, db)
     all_metric_ids = _decision_metric_ids(decision_id, db)
     if not all_activity_ids:
@@ -1553,19 +1633,35 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
         raise HTTPException(status_code=422, detail="No metrics found for this decision")
     allowed_activity_ids = _validate_ai_id_filter(body, "activity_ids", all_activity_ids)
     allowed_metric_ids = _validate_ai_id_filter(body, "metric_ids", all_metric_ids)
+    expected_pairs = _expected_score_pairs(allowed_activity_ids, allowed_metric_ids)
+    max_drafts_cap = max(caps["max_score_drafts_per_request"], len(expected_pairs) or 1)
+    max_drafts = _validate_ai_max_field(body, "max_drafts", max_drafts_cap)
+    if expected_pairs:
+        max_drafts = max(max_drafts, len(expected_pairs))
     evidence_policy = _enum_field(body.get("evidence_review_policy"), AI_EVIDENCE_REVIEW_POLICIES, "evidence_review_policy", "approved_and_pending")
     allowed_evidence_statuses = {"approved"} if evidence_policy == "approved_only" else {"approved", "pending"}
     activities = db.query(Activity).filter(Activity.id.in_(allowed_activity_ids)).all()
     metrics = db.query(Metric).filter(Metric.id.in_(allowed_metric_ids)).all()
+    activities_by_id = {activity.id: activity for activity in activities}
+    metrics_by_id = {metric.id: metric for metric in metrics}
     output = _ai_call_or_error(build_decision_context(
         decision, activities, metrics, body.get("user_context") or "",
-        instruction="Return JSON only. Use the EXACT activity_id and metric_id values from the decision context above. Suggest scores (0-100) for each activity on each metric based on available evidence. Each score_draft must have: activity_id (integer, must match one of the IDs provided above), metric_id (integer, must match one of the IDs provided above), suggested_score (0-100), rationale, confidence (0-1), evidence_ids (list of applicable evidence item IDs). Return an empty score_drafts array only if there is truly nothing to suggest.",
+        instruction=(
+            "Return JSON only. Use the EXACT activity_id and metric_id values from the decision context above. "
+            "Suggest exactly one score_draft for EVERY requested activity/metric pair. Do not omit any pair. "
+            "Scores must be 0-100 and should be based on available evidence. Each score_draft must have: "
+            "activity_id (integer, must match one of the IDs provided above), metric_id (integer, must match one "
+            "of the IDs provided above), suggested_score (0-100), rationale, confidence (0-1), evidence_ids "
+            "(list of applicable evidence item IDs). Return an empty score_drafts array only if there are no "
+            "requested activity/metric pairs."
+        ),
     ))
     raw_drafts = output.get("score_drafts", [])
     if not isinstance(raw_drafts, list):
         raise HTTPException(status_code=502, detail="AI provider returned malformed output")
     created = []
     skipped = []
+    seen_pairs = set()
     for raw in raw_drafts[:max_drafts]:
         try:
             if not isinstance(raw, dict):
@@ -1578,6 +1674,17 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
                 raise ValueError("activity_id is outside requested filters")
             if metric_id not in allowed_metric_ids:
                 raise ValueError("metric_id is outside requested filters")
+            pair = (activity_id, metric_id)
+            if pair in seen_pairs:
+                raise ValueError("duplicate score draft for activity/metric pair")
+            evidence_ids = _validate_ai_draft_evidence_ids(
+                decision_id,
+                activity_id,
+                metric_id,
+                raw.get("evidence_ids", []),
+                allowed_evidence_statuses,
+                db,
+            )
             draft = ScoreDraft(
                 decision_id=decision_id,
                 activity_id=activity_id,
@@ -1591,10 +1698,19 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
             )
             db.add(draft)
             db.flush()
-            _set_ai_draft_evidence(draft, raw.get("evidence_ids", []), allowed_evidence_statuses, db)
+            for evidence_id in evidence_ids:
+                db.add(ScoreDraftEvidence(score_draft_id=draft.id, evidence_item_id=evidence_id))
             created.append(draft)
+            seen_pairs.add(pair)
         except (HTTPException, ValueError) as exc:
             skipped.append({"reason": getattr(exc, "detail", str(exc))})
+    missing_pairs = expected_pairs - seen_pairs
+    if missing_pairs:
+        db.rollback()
+        detail = _missing_score_detail(missing_pairs, activities_by_id, metrics_by_id)
+        detail["message"] = f"AI provider omitted scores for {len(missing_pairs)} activity/metric pair(s)"
+        detail["skipped"] = skipped
+        raise HTTPException(status_code=502, detail=detail)
     if not created:
         parts = ["AI provider returned no valid score drafts"]
         if not raw_drafts:
@@ -1606,6 +1722,48 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
         raise HTTPException(status_code=502, detail=" ".join(parts))
     db.commit()
     return {"score_drafts": [_draft_serializer(draft, db) for draft in created], "warnings": output.get("warnings", []) if isinstance(output.get("warnings", []), list) else [], "skipped": skipped}
+
+
+@router.post("/decisions/{decision_id}/ai/summary")
+def ai_result_summary(decision_id: int, body: dict, db: Session = Depends(get_db)):
+    decision = _get_decision_or_404(decision_id, db)
+    detail = _build_decision_detail(decision_id, db)
+    evidence = (
+        db.query(EvidenceItem)
+        .filter(EvidenceItem.decision_id == decision_id)
+        .filter(EvidenceItem.review_status != "rejected")
+        .order_by(EvidenceItem.id.asc())
+        .all()
+    )
+    output = _ai_call_or_error(build_decision_context(
+        decision,
+        db.query(Activity).filter(Activity.decision_id == decision_id).all(),
+        db.query(Metric).filter(Metric.id.in_(_decision_metric_ids(decision_id, db))).all(),
+        body.get("user_context") or "",
+        instruction=(
+            "Return JSON only with a top-level string field named summary. Summarize the final decision results "
+            "for the user in 2-4 concise paragraphs. Mention the leading alternative, the main criteria that drove "
+            "the result, important tradeoffs, KO/threshold effects if present, and whether the evidence appears strong "
+            "or limited. Do not invent facts beyond the provided data. Use this decision data: "
+            + json.dumps({
+                "decision": detail.get("decision"),
+                "activities": detail.get("activities", []),
+                "metrics": detail.get("metrics", []),
+                "weights": detail.get("weights", []),
+                "results": detail.get("results", []),
+                "rows": detail.get("rows", []),
+                "ko_result": detail.get("ko_result"),
+                "ko_criteria": detail.get("ko_criteria"),
+                "thresholds": detail.get("thresholds"),
+                "filter_result": detail.get("filter_result"),
+                "evidence": [_evidence_serializer(item) for item in evidence],
+            }, default=str)
+        ),
+    ))
+    summary = output.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        raise HTTPException(status_code=502, detail="AI provider returned no summary")
+    return {"summary": summary.strip()[:4000]}
 
 
 def custom_metric_serializer(metric: Metric) -> dict:

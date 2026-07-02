@@ -1,0 +1,1743 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 5db0864..0b7fdac 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -2,7 +2,6 @@ import { Routes, Route } from "react-router-dom";
+ import Layout from "@/components/Layout";
+ import Landing from "@/components/Landing";
+ import Review from "@/components/Review";
+-import Scoring from "@/components/Scoring";
+ import Results from "@/components/Results";
+ import DecisionList from "@/components/DecisionList";
+ import MetricsManager from "@/components/MetricsManager";
+@@ -14,7 +13,6 @@ export default function App() {
+         <Route path="/" element={<Landing />} />
+         <Route path="/decisions" element={<DecisionList />} />
+         <Route path="/decisions/:id/review" element={<Review />} />
+-        <Route path="/decisions/:id/score" element={<Scoring />} />
+         <Route path="/decisions/:id/result" element={<Results />} />
+         <Route path="/metrics" element={<MetricsManager />} />
+       </Routes>
+diff --git a/frontend/src/components/Results.tsx b/frontend/src/components/Results.tsx
+index 71f4638..ba6ca09 100644
+--- a/frontend/src/components/Results.tsx
++++ b/frontend/src/components/Results.tsx
+@@ -1,4 +1,4 @@
+-import { useState, useMemo, useCallback } from "react";
++import { useState, useMemo, useCallback, useEffect } from "react";
+ import { useParams, useNavigate } from "react-router-dom";
+ import { useDecision } from "@/hooks/useDecision";
+ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+@@ -17,6 +17,7 @@ import RadarChart from "@/components/RadarChart";
+ import DecisionRobustnessCard from "@/components/DecisionRobustnessCard";
+ import ThresholdPanel from "@/components/ThresholdPanel";
+ import ExportButton from "@/components/ExportButton";
++import { api } from "@/lib/api";
+ import type { FitResult, KoResult } from "@/types";
+ import { filterResultsToSurvivors, recomputeFitScores } from "@/lib/scoring";
+ 
+@@ -66,6 +67,9 @@ export default function Results() {
+   const [metricWeights, setMetricWeights] = useState<Record<string, number>>(
+     {},
+   );
++  const [aiSummary, setAiSummary] = useState<string | null>(null);
++  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
++  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+ 
+   const decisionId = id ? parseInt(id) : 0;
+   const isSingle = (data?.activities?.length ?? 0) <= 1;
+@@ -107,6 +111,34 @@ export default function Results() {
+     return Math.max(...rankingResults.map((r) => r.fit_pct), 1);
+   }, [rankingResults]);
+ 
++  useEffect(() => {
++    if (!decisionId || !hasScores) return;
++    let cancelled = false;
++
++    async function generateSummary() {
++      setAiSummaryLoading(true);
++      setAiSummaryError(null);
++      try {
++        const status = await api.getAIStatus();
++        if (!status.enabled) {
++          if (!cancelled) setAiSummary(null);
++          return;
++        }
++        const res = await api.generateResultSummary(decisionId);
++        if (!cancelled) setAiSummary(res.summary);
++      } catch (e: any) {
++        if (!cancelled) setAiSummaryError(e.message || "AI summary generation failed.");
++      } finally {
++        if (!cancelled) setAiSummaryLoading(false);
++      }
++    }
++
++    generateSummary();
++    return () => {
++      cancelled = true;
++    };
++  }, [decisionId, hasScores]);
++
+   // ── Loading state ──
+   if (loading) {
+     return (
+@@ -146,9 +178,9 @@ export default function Results() {
+             <p className="text-sm text-muted-foreground">
+               Score your alternatives to see the results.
+             </p>
+-            <Button onClick={() => navigate(`/decisions/${decisionId}/score`)}>
++            <Button onClick={() => navigate(`/decisions/${decisionId}/review`)}>
+               <ArrowRight className="mr-2 h-4 w-4" />
+-              Go to Scoring
++              Go to Review
+             </Button>
+           </CardContent>
+         </Card>
+@@ -171,14 +203,36 @@ export default function Results() {
+           <Button
+             variant="outline"
+             size="sm"
+-            onClick={() => navigate(`/decisions/${decisionId}/score`)}
++            onClick={() => navigate(`/decisions/${decisionId}/review`)}
+           >
+-            Re-score
++            Review / re-score
+           </Button>
+           <ExportButton decisionId={decisionId} />
+         </div>
+       </div>
+ 
++      {(aiSummaryLoading || aiSummary || aiSummaryError) && (
++        <Card>
++          <CardHeader>
++            <CardTitle className="text-xl">AI Summary</CardTitle>
++          </CardHeader>
++          <CardContent>
++            {aiSummaryLoading && (
++              <p className="text-sm text-muted-foreground flex items-center gap-2">
++                <Loader2 className="h-4 w-4 animate-spin" />
++                Generating summary…
++              </p>
++            )}
++            {!aiSummaryLoading && aiSummary && (
++              <p className="text-sm leading-6 whitespace-pre-line">{aiSummary}</p>
++            )}
++            {!aiSummaryLoading && aiSummaryError && !aiSummary && (
++              <p className="text-sm text-muted-foreground">{aiSummaryError}</p>
++            )}
++          </CardContent>
++        </Card>
++      )}
++
+       {/* ── Ranking Cards ── */}
+       <section className="space-y-3">
+         <h2 className="text-xl font-semibold">
+diff --git a/frontend/src/components/Review.tsx b/frontend/src/components/Review.tsx
+index ad1ef48..d0fb38a 100644
+--- a/frontend/src/components/Review.tsx
++++ b/frontend/src/components/Review.tsx
+@@ -1,4 +1,4 @@
+-import { useState, useEffect, useMemo } from "react";
++import { useState, useEffect, useMemo, useCallback } from "react";
+ import { useParams, useNavigate } from "react-router-dom";
+ import { useDecision } from "@/hooks/useDecision";
+ import { useScoring } from "@/hooks/useScoring";
+@@ -23,7 +23,7 @@ import {
+   CheckCheck,
+   Sparkles,
+ } from "lucide-react";
+-import type { AIAvailability, AIMetricSuggestion, AIMetricRecommendation, Metric, ScoreDraft } from "@/types";
++import type { AIAvailability, AIMetricSuggestion, AIMetricRecommendation, Metric, ScoreDraft, EvidenceItem } from "@/types";
+ 
+ const DIMENSION_ORDER = [
+   "Resource Fit",
+@@ -52,6 +52,32 @@ const FIT_CATEGORY_OPTIONS = [
+   "Practical Fit",
+ ];
+ 
++function AIContextField({
++  value,
++  onChange,
++}: {
++  value: string;
++  onChange: (value: string) => void;
++}) {
++  return (
++    <div className="space-y-2">
++      <Label htmlFor="user-context" className="text-sm font-medium">
++        Context for AI (optional)
++      </Label>
++      <textarea
++        id="user-context"
++        value={value}
++        onChange={(e) => onChange(e.target.value)}
++        placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
++        className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
++      />
++      <p className="text-xs text-muted-foreground">
++        This context is sent with every AI request across all steps.
++      </p>
++    </div>
++  );
++}
++
+ export default function Review() {
+   const { id } = useParams<{ id: string }>();
+   const navigate = useNavigate();
+@@ -85,7 +111,6 @@ export default function Review() {
+   const [step, setStep] = useState(1);
+   const [aiStatus, setAiStatus] = useState<AIAvailability | null>(null);
+   const [aiSuggestions, setAiSuggestions] = useState<AIMetricSuggestion[]>([]);
+-  const [selectedSuggestionIndexes, setSelectedSuggestionIndexes] = useState<number[]>([]);
+   const [aiRecommendations, setAiRecommendations] = useState<Record<string, AIMetricRecommendation>>({});
+   const [aiBusy, setAiBusy] = useState(false);
+   const [aiMessage, setAiMessage] = useState<string | null>(null);
+@@ -94,7 +119,6 @@ export default function Review() {
+   const {
+     scores: scoreValues,
+     updateScore,
+-    submit: submitScores,
+     submitting: scoresSubmitting,
+     error: scoresError,
+   } = useScoring(parseInt(id || "0"));
+@@ -176,24 +200,65 @@ export default function Review() {
+     setScoresPrePopulated(found);
+   }, [step, scoresPrePopulated, data, updateScore]);
+ 
+-  // ── AI Score Drafts (Step 3) ──
+-  const [aiScoreDrafts, setAiScoreDrafts] = useState<Record<string, ScoreDraft>>({});
++  // ── Evidence + AI Score Drafts (Step 3) ──
++  const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
++  const [scoreDrafts, setScoreDrafts] = useState<ScoreDraft[]>([]);
++  const [manualEvidenceClaims, setManualEvidenceClaims] = useState<Record<string, string>>({});
++  const [draftEditScores, setDraftEditScores] = useState<Record<number, number>>({});
+ 
+-  const handleSuggestScores = async () => {
++  const refreshEvidenceDrafts = useCallback(async () => {
+     if (!id) return;
++    const decisionId = parseInt(id);
++    const [evidenceRes, draftsRes] = await Promise.all([
++      api.getEvidence(decisionId),
++      api.getScoreDrafts(decisionId),
++    ]);
++    setEvidence(evidenceRes.evidence);
++    setScoreDrafts(draftsRes.drafts);
++  }, [id]);
++
++  useEffect(() => {
++    if (step !== 3) return;
++    refreshEvidenceDrafts().catch(() => undefined);
++  }, [step, refreshEvidenceDrafts]);
++
++  const handleDraftEvidence = async () => {
++    if (!id || !data) return;
++    const selectedMetricIds = data.metrics.filter((m) => includedMetrics[m.id]).map((m) => m.id);
++    setAiBusy(true);
++    setAiMessage(null);
++    try {
++      const res = await api.draftEvidenceWithAI(parseInt(id), {
++        user_context: userContext || undefined,
++        activity_ids: data.activities.map((a) => a.id),
++        metric_ids: selectedMetricIds,
++        include_general_evidence: false,
++        max_items: Math.max(1, data.activities.length * selectedMetricIds.length),
++      });
++      await refreshEvidenceDrafts();
++      setAiMessage(`AI drafted ${res.evidence_items.length} pending evidence item(s).`);
++    } catch (e: any) {
++      setAiMessage(e.message || "AI evidence drafting failed.");
++    } finally {
++      setAiBusy(false);
++    }
++  };
++
++  const handleSuggestScores = async () => {
++    if (!id || !data) return;
++    const selectedMetricIds = data.metrics.filter((m) => includedMetrics[m.id]).map((m) => m.id);
+     setAiBusy(true);
+     setAiMessage(null);
+     try {
+       const res = await api.suggestScoresWithAI(parseInt(id), {
+         user_context: userContext || undefined,
++        activity_ids: data.activities.map((a) => a.id),
++        metric_ids: selectedMetricIds,
+         evidence_review_policy: "approved_and_pending",
++        max_drafts: Math.max(1, data.activities.length * selectedMetricIds.length),
+       });
+-      const drafts: Record<string, ScoreDraft> = {};
+-      for (const draft of res.score_drafts) {
+-        drafts[`${draft.activity_id}_${draft.metric_id}`] = draft;
+-      }
+-      setAiScoreDrafts(drafts);
+-      setAiMessage(`AI suggested ${res.score_drafts.length} score(s).`);
++      await refreshEvidenceDrafts();
++      setAiMessage(`AI created ${res.score_drafts.length} pending score draft(s).`);
+     } catch (e: any) {
+       setAiMessage(e.message || "AI score suggestion failed.");
+     } finally {
+@@ -201,21 +266,52 @@ export default function Review() {
+     }
+   };
+ 
+-  const handleApplyScoreDraft = (draft: ScoreDraft) => {
+-    updateScore(draft.activity_id, draft.metric_id, draft.suggested_score);
+-    setAiScoreDrafts((prev) => {
++  const handleApplyScoreDraft = async (draft: ScoreDraft) => {
++    if (!id) return;
++    const decisionId = parseInt(id);
++    const editedScore = draftEditScores[draft.id];
++    if (editedScore !== undefined && editedScore !== draft.effective_score) {
++      await api.updateScoreDraft(decisionId, draft.id, { human_adjusted_score: editedScore });
++    }
++    const res = await api.applyScoreDraft(decisionId, draft.id);
++    updateScore(res.score.activity_id, res.score.metric_id, res.score.score);
++    setDraftEditScores((prev) => {
+       const next = { ...prev };
+-      delete next[`${draft.activity_id}_${draft.metric_id}`];
++      delete next[draft.id];
+       return next;
+     });
++    await refreshEvidenceDrafts();
+   };
+ 
+-  const handleRejectScoreDraft = (activityId: number, metricId: number) => {
+-    setAiScoreDrafts((prev) => {
++  const handleRejectScoreDraft = async (draft: ScoreDraft) => {
++    if (!id) return;
++    await api.rejectScoreDraft(parseInt(id), draft.id);
++    setDraftEditScores((prev) => {
+       const next = { ...prev };
+-      delete next[`${activityId}_${metricId}`];
++      delete next[draft.id];
+       return next;
+     });
++    await refreshEvidenceDrafts();
++  };
++
++  const handleAddEvidence = async (activityId: number, metricId: number) => {
++    if (!id) return;
++    const key = `${activityId}_${metricId}`;
++    const claim = (manualEvidenceClaims[key] || "").trim();
++    if (!claim) return;
++    await api.createEvidence(parseInt(id), { activity_id: activityId, metric_id: metricId, claim });
++    setManualEvidenceClaims((prev) => ({ ...prev, [key]: "" }));
++    await refreshEvidenceDrafts();
++  };
++
++  const handleReviewEvidence = async (item: EvidenceItem, action: "approve" | "reject") => {
++    if (!id) return;
++    if (action === "approve") {
++      await api.approveEvidence(parseInt(id), item.id);
++    } else {
++      await api.rejectEvidence(parseInt(id), item.id);
++    }
++    await refreshEvidenceDrafts();
+   };
+ 
+   // Group all metrics by dimension category, sorted in ontology order
+@@ -425,8 +521,7 @@ export default function Review() {
+     try {
+       const res = await api.suggestMetricsWithAI(parseInt(id), { user_context: userContext || undefined });
+       setAiSuggestions(res.metric_suggestions);
+-      setSelectedSuggestionIndexes(res.metric_suggestions.map((_, index) => index));
+-      setAiMessage(`AI suggested ${res.metric_suggestions.length} criteria. Select the ones to add.`);
++      setAiMessage(`AI suggested ${res.metric_suggestions.length} criteria. Review each row and accept or reject it.`);
+     } catch (e: any) {
+       setAiMessage(e.message || "AI metric suggestion failed.");
+     } finally {
+@@ -438,46 +533,44 @@ export default function Review() {
+     setAiSuggestions((prev) => prev.map((suggestion, i) => i === index ? { ...suggestion, ...patch } : suggestion));
+   };
+ 
+-  const handleCreateSelectedSuggestions = async () => {
++  const handleAcceptSuggestion = async (index: number) => {
+     if (!id) return;
++    const suggestion = aiSuggestions[index];
++    if (!suggestion) return;
+     setAiBusy(true);
+     try {
+       const decisionId = parseInt(id);
+       const existingNames = new Set((data?.metrics ?? []).map((m) => m.name.toLowerCase()));
+-      let added = 0;
+-      let skipped = 0;
+-      for (const index of selectedSuggestionIndexes) {
+-        const suggestion = aiSuggestions[index];
+-        if (!suggestion) continue;
+-        if (existingNames.has(suggestion.name.trim().toLowerCase())) {
+-          skipped++;
+-          continue;
+-        }
+-        const created = await api.createCustomMetric(decisionId, {
+-          name: suggestion.name.trim(),
+-          category: suggestion.category.trim(),
+-          description: suggestion.description || suggestion.why_it_matters,
+-          weight: suggestion.recommended_weight ?? 50,
+-        });
+-        existingNames.add(created.name.toLowerCase());
+-        setMetricWeights((prev) => ({ ...prev, [created.id]: suggestion.recommended_weight ?? 50 }));
+-        setIncludedMetrics((prev) => ({ ...prev, [created.id]: true }));
+-        added++;
++      if (existingNames.has(suggestion.name.trim().toLowerCase())) {
++        setAiSuggestions((prev) => prev.filter((_, i) => i !== index));
++        setAiMessage(`Skipped "${suggestion.name}" because it already exists.`);
++        return;
+       }
+-      setAiSuggestions([]);
+-      setSelectedSuggestionIndexes([]);
++      const created = await api.createCustomMetric(decisionId, {
++        name: suggestion.name.trim(),
++        category: suggestion.category.trim(),
++        description: suggestion.description || suggestion.why_it_matters,
++        weight: suggestion.recommended_weight ?? 50,
++      });
++      setMetricWeights((prev) => ({ ...prev, [created.id]: suggestion.recommended_weight ?? 50 }));
++      setIncludedMetrics((prev) => ({ ...prev, [created.id]: true }));
++      setKoThresholds((prev) => ({ ...prev, [created.id]: null }));
++      setAiSuggestions((prev) => prev.filter((_, i) => i !== index));
+       await refetch();
+-      const parts: string[] = [];
+-      if (added > 0) parts.push(`Added ${added} custom metric(s).`);
+-      if (skipped > 0) parts.push(`${skipped} already exist(s).`);
+-      setAiMessage(parts.length > 0 ? parts.join(" ") : "No new metrics to add.");
++      setAiMessage(`Added "${created.name}".`);
+     } catch (e: any) {
+-      setAiMessage(e.message || "Failed to add AI suggestions.");
++      setAiMessage(e.message || "Failed to add AI suggestion.");
+     } finally {
+       setAiBusy(false);
+     }
+   };
+ 
++  const handleRejectSuggestion = (index: number) => {
++    const rejected = aiSuggestions[index]?.name;
++    setAiSuggestions((prev) => prev.filter((_, i) => i !== index));
++    if (rejected) setAiMessage(`Rejected "${rejected}".`);
++  };
++
+   const handleOptimizeWeights = async () => {
+     if (!id) return;
+     setAiBusy(true);
+@@ -577,6 +670,8 @@ export default function Review() {
+         ko_criteria: koPayload.length > 0 ? koPayload : undefined,
+       });
+ 
++      setScoresPrePopulated(false);
++      await refetch();
+       setStep(3);
+     } catch (e: any) {
+       setSubmitError(e.message || "Failed to save. Please try again.");
+@@ -590,10 +685,19 @@ export default function Review() {
+   const handleFinalSubmit = async () => {
+     setSubmitError(null);
+ 
+-    if (!id) return;
++    if (!id || !data) return;
++    const selectedMetrics = data.metrics.filter((m) => includedMetrics[m.id]);
++    const scores = data.activities.flatMap((activity) =>
++      selectedMetrics.map((metric) => ({
++        activity_id: activity.id,
++        metric_id: metric.id,
++        score: scoreValues[`${activity.id}_${metric.id}`] ?? 0,
++      })),
++    );
++
+     setSubmitting(true);
+     try {
+-      await submitScores();
++      await api.submitScores(parseInt(id), scores);
+       navigate(`/decisions/${parseInt(id)}/result`);
+     } catch (e: any) {
+       setSubmitError(e.message || "Failed to submit scores.");
+@@ -624,7 +728,95 @@ export default function Review() {
+ 
+   if (!data) return null;
+ 
+-  const decisionId = parseInt(id || "0");
++  const renderCellReview = (activityId: number, metricId: number) => {
++    const key = `${activityId}_${metricId}`;
++    const cellEvidence = evidence.filter(
++      (item) =>
++        (!item.activity_id || item.activity_id === activityId) &&
++        (!item.metric_id || item.metric_id === metricId),
++    );
++    const cellDrafts = scoreDrafts.filter(
++      (draft) =>
++        draft.activity_id === activityId &&
++        draft.metric_id === metricId &&
++        draft.status !== "applied" &&
++        draft.status !== "rejected",
++    );
++
++    return (
++      <div className="mt-2 space-y-2 text-xs">
++        <div className="flex gap-1">
++          <Input
++            value={manualEvidenceClaims[key] ?? ""}
++            onChange={(e) =>
++              setManualEvidenceClaims((prev) => ({ ...prev, [key]: e.target.value }))
++            }
++            placeholder="Add evidence"
++            className="h-7 text-xs"
++          />
++          <Button size="sm" variant="outline" onClick={() => handleAddEvidence(activityId, metricId)}>
++            Add
++          </Button>
++        </div>
++
++        {cellEvidence.map((item) => (
++          <div key={item.id} className="rounded border bg-muted/30 p-1.5 space-y-1">
++            <div className="flex flex-wrap items-start gap-1">
++              <Badge variant="outline" className="mr-1 text-[10px]">
++                {item.review_status}
++              </Badge>
++              <span>{item.claim}</span>
++            </div>
++            {item.rationale && (
++              <p className="text-[10px] text-muted-foreground">{item.rationale}</p>
++            )}
++            {item.review_status === "pending" && (
++              <div className="flex gap-1">
++                <Button size="sm" variant="outline" className="h-6 text-[10px] px-1.5" onClick={() => handleReviewEvidence(item, "approve")}>
++                  Approve evidence
++                </Button>
++                <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5" onClick={() => handleReviewEvidence(item, "reject")}>
++                  Reject
++                </Button>
++              </div>
++            )}
++          </div>
++        ))}
++
++        {cellDrafts.map((draft) => (
++          <div key={draft.id} className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-1.5 space-y-1">
++            <div className="flex flex-wrap items-center gap-1.5">
++              <span className="text-blue-700 dark:text-blue-300">AI score draft</span>
++              <Input
++                type="number"
++                min={0}
++                max={100}
++                value={draftEditScores[draft.id] ?? draft.effective_score}
++                onChange={(e) =>
++                  setDraftEditScores((prev) => ({
++                    ...prev,
++                    [draft.id]: Number(e.target.value),
++                  }))
++                }
++                className="h-7 w-20 text-xs border-blue-200 dark:border-blue-800"
++                aria-label="Draft score"
++              />
++              <Button size="sm" variant="outline" className="h-6 text-[10px] px-1.5 ml-auto" onClick={() => handleApplyScoreDraft(draft)}>
++                Apply
++              </Button>
++              <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5" onClick={() => handleRejectScoreDraft(draft)}>
++                Reject
++              </Button>
++            </div>
++            {draft.rationale && (
++              <p className="text-[10px] text-blue-700 dark:text-blue-300">{draft.rationale}</p>
++            )}
++          </div>
++        ))}
++      </div>
++    );
++  };
++
+   const stepLabels = ["Set Criteria", "Set Weights", "Score"];
+ 
+   return (
+@@ -688,14 +880,8 @@ export default function Review() {
+         <>
+           {/* ── User context (shared for all AI calls) ── */}
+           <Card>
+-            <CardHeader>
+-              <CardTitle className="text-xl">Context for AI</CardTitle>
+-            </CardHeader>
+-            <CardContent>
+-              <textarea id="user-context" value={userContext} onChange={(e) => setUserContext(e.target.value)}
+-                placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
+-                className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+-              <p className="text-xs text-muted-foreground mt-1">This context is sent with every AI request across all steps.</p>
++            <CardContent className="pt-6">
++              <AIContextField value={userContext} onChange={setUserContext} />
+             </CardContent>
+           </Card>
+ 
+@@ -783,20 +969,21 @@ export default function Review() {
+                       .filter((g) => g.dimension === dimension)
+                       .map(({ items }) =>
+                         items.map(({ index, suggestion }) => (
+-                          <div key={`ai-preview-${index}`} className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-2.5 flex items-start gap-2">
+-                            <Checkbox
+-                              checked={selectedSuggestionIndexes.includes(index)}
+-                              onCheckedChange={(checked) =>
+-                                setSelectedSuggestionIndexes((prev) =>
+-                                  checked ? [...prev, index] : prev.filter((i) => i !== index)
+-                                )
+-                              }
+-                            />
+-                            <div className="grid flex-1 gap-1.5 sm:grid-cols-[1fr_1fr_5rem]">
++                          <div key={`ai-preview-${index}`} className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-2.5 space-y-2">
++                            <div className="grid gap-1.5 sm:grid-cols-[1fr_1fr_5rem]">
+                               <Input value={suggestion.name} onChange={(e) => updateAiSuggestion(index, { name: e.target.value })} aria-label="Name" className="h-8 text-xs border-blue-200 dark:border-blue-800" />
+                               <Input value={suggestion.category} onChange={(e) => updateAiSuggestion(index, { category: e.target.value })} aria-label="Category" className="h-8 text-xs border-blue-200 dark:border-blue-800" />
+                               <Input type="number" min={0} max={100} value={suggestion.recommended_weight} onChange={(e) => updateAiSuggestion(index, { recommended_weight: Number(e.target.value) })} aria-label="Weight" className="h-8 text-xs border-blue-200 dark:border-blue-800" />
+                             </div>
++                            {(suggestion.description || suggestion.why_it_matters) && (
++                              <p className="text-xs text-blue-700 dark:text-blue-300">
++                                {suggestion.description || suggestion.why_it_matters}
++                              </p>
++                            )}
++                            <div className="flex justify-end gap-1.5">
++                              <Button size="sm" variant="outline" className="h-7 text-xs px-2" disabled={aiBusy} onClick={() => handleAcceptSuggestion(index)}>Accept</Button>
++                              <Button size="sm" variant="ghost" className="h-7 text-xs px-2" disabled={aiBusy} onClick={() => handleRejectSuggestion(index)}>Reject</Button>
++                            </div>
+                           </div>
+                         )),
+                       )}
+@@ -813,11 +1000,6 @@ export default function Review() {
+                   <Button variant="outline" size="sm" onClick={handleSuggestMetrics} disabled={!aiStatus?.enabled || aiBusy}>
+                     {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Suggesting...</> : <><Sparkles className="h-4 w-4 mr-1" /> Suggest metrics with AI</>}
+                   </Button>
+-                  {aiSuggestions.length > 0 && (
+-                    <Button size="sm" onClick={handleCreateSelectedSuggestions} disabled={aiBusy || !selectedSuggestionIndexes.length}>
+-                      {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Creating...</> : `Add selected (${selectedSuggestionIndexes.length})`}
+-                    </Button>
+-                  )}
+                   <Button variant="outline" size="sm" onClick={() => { resetAddForm(); setShowAddCustomForm(true); }}>
+                     <Plus className="h-4 w-4 mr-1" /> Add Custom Metric
+                   </Button>
+@@ -900,13 +1082,7 @@ export default function Review() {
+             </CardHeader>
+             <CardContent className="space-y-6">
+               {/* ── User context (shared for all AI calls) ── */}
+-              <div className="space-y-2">
+-                <Label htmlFor="user-context" className="text-sm font-medium">Context for AI (optional)</Label>
+-                <textarea id="user-context" value={userContext} onChange={(e) => setUserContext(e.target.value)}
+-                  placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
+-                  className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+-                <p className="text-xs text-muted-foreground">This context is sent with every AI request across all steps.</p>
+-              </div>
++              <AIContextField value={userContext} onChange={setUserContext} />
+ 
+               <p className="text-sm text-muted-foreground">
+                 Every slider is a 0–100 fit score. Higher always means better fit.
+@@ -1010,26 +1186,20 @@ export default function Review() {
+             </CardHeader>
+             <CardContent className="space-y-6">
+               {/* ── User context (shared for all AI calls) ── */}
+-              <div className="space-y-2">
+-                <Label htmlFor="user-context" className="text-sm font-medium">Context for AI (optional)</Label>
+-                <textarea id="user-context" value={userContext} onChange={(e) => setUserContext(e.target.value)}
+-                  placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
+-                  className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+-                <p className="text-xs text-muted-foreground">This context is sent with every AI request across all steps.</p>
+-              </div>
++              <AIContextField value={userContext} onChange={setUserContext} />
+ 
+               <p className="text-sm text-muted-foreground">
+                 Every slider is a 0–100 fit score. Higher always means better fit.
+               </p>
+ 
+-              {/* ── AI Score Suggestions ── */}
++              {/* ── AI Evidence + Score Suggestions ── */}
+               <div className="flex flex-wrap items-center gap-2">
++                <Button variant="outline" onClick={handleDraftEvidence} disabled={!aiStatus?.enabled || aiBusy} size="sm">
++                  {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Working...</> : <><Sparkles className="h-4 w-4 mr-1" /> Draft evidence with AI</>}
++                </Button>
+                 <Button variant="outline" onClick={handleSuggestScores} disabled={!aiStatus?.enabled || aiBusy} size="sm">
+-                  {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Suggesting...</> : <><Sparkles className="h-4 w-4 mr-1" /> Suggest scores with AI</>}
++                  {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Working...</> : <><Sparkles className="h-4 w-4 mr-1" /> Suggest scores with AI</>}
+                 </Button>
+-                {Object.keys(aiScoreDrafts).length > 0 && (
+-                  <Button variant="ghost" size="sm" onClick={() => setAiScoreDrafts({})}>Clear all</Button>
+-                )}
+                 {!aiStatus?.enabled && (
+                   <span className="text-xs text-muted-foreground">AI assistance is unavailable ({aiStatus?.reason ?? "disabled"}).</span>
+                 )}
+@@ -1058,7 +1228,6 @@ export default function Review() {
+                       </div>
+                       {data.activities.map((act) => {
+                         const val = scoreValues[`${act.id}_${metric.id}`] ?? 0;
+-                        const draft = aiScoreDrafts[`${act.id}_${metric.id}`];
+                         return (
+                           <div key={`${act.id}_${metric.id}`} className="p-3">
+                             <div className="flex items-center gap-3">
+@@ -1068,14 +1237,7 @@ export default function Review() {
+                                 <span className="text-[10px] text-muted-foreground leading-tight">{scoreLabel(val)}</span>
+                               </div>
+                             </div>
+-                            {draft && (
+-                              <div className="mt-1.5 rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-1.5 flex items-center gap-1.5">
+-                                <span className="text-xs text-blue-700 dark:text-blue-300">AI: <strong>{draft.suggested_score}</strong></span>
+-                                {draft.rationale && <span className="text-[10px] text-blue-500 truncate max-w-[120px]">{draft.rationale}</span>}
+-                                <Button size="sm" variant="outline" className="h-5 text-[10px] px-1.5 ml-auto" onClick={() => handleApplyScoreDraft(draft)}>Apply</Button>
+-                                <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5" onClick={() => handleRejectScoreDraft(act.id, metric.id)}>Reject</Button>
+-                              </div>
+-                            )}
++                            {renderCellReview(act.id, metric.id)}
+                           </div>
+                         );
+                       })}
+@@ -1092,7 +1254,6 @@ export default function Review() {
+                     <CardContent className="space-y-5">
+                       {data.metrics.filter((m) => includedMetrics[m.id]).map((metric) => {
+                         const val = scoreValues[`${act.id}_${metric.id}`] ?? 0;
+-                        const draft = aiScoreDrafts[`${act.id}_${metric.id}`];
+                         return (
+                           <div key={`${act.id}_${metric.id}`} className="space-y-2">
+                             <div className="flex items-center justify-between">
+@@ -1103,13 +1264,7 @@ export default function Review() {
+                               </div>
+                             </div>
+                             <Slider value={[val]} onValueChange={(v) => updateScore(act.id, metric.id, v[0])} min={0} max={100} step={1} />
+-                            {draft && (
+-                              <div className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-1.5 flex items-center gap-1.5">
+-                                <span className="text-xs text-blue-700 dark:text-blue-300">AI: <strong>{draft.suggested_score}</strong></span>
+-                                <Button size="sm" variant="outline" className="h-5 text-[10px] px-1.5 ml-auto" onClick={() => handleApplyScoreDraft(draft)}>Apply</Button>
+-                                <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5" onClick={() => handleRejectScoreDraft(act.id, metric.id)}>Reject</Button>
+-                              </div>
+-                            )}
++                            {renderCellReview(act.id, metric.id)}
+                           </div>
+                         );
+                       })}
+diff --git a/frontend/src/components/Scoring.tsx b/frontend/src/components/Scoring.tsx
+deleted file mode 100644
+index c250afb..0000000
+--- a/frontend/src/components/Scoring.tsx
++++ /dev/null
+@@ -1,532 +0,0 @@
+-import { useEffect, useState } from "react";
+-import { useParams, useNavigate } from "react-router-dom";
+-import { useDecision } from "@/hooks/useDecision";
+-import { useScoring } from "@/hooks/useScoring";
+-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+-import { Button } from "@/components/ui/button";
+-import { Input } from "@/components/ui/input";
+-import { Slider } from "@/components/ui/slider";
+-import { Alert, AlertDescription } from "@/components/ui/alert";
+-import { Badge } from "@/components/ui/badge";
+-import { Loader2, ArrowRight } from "lucide-react";
+-import { api } from "@/lib/api";
+-import type { AIAvailability, EvidenceItem, ScoreDraft } from "@/types";
+-
+-/** Map a fit score (0–100) to a Tailwind text color class. */
+-function scoreColor(value: number): string {
+-  const pct = value / 100;
+-  if (pct >= 0.7) return "text-green-600 dark:text-green-400";
+-  if (pct >= 0.4) return "text-amber-600 dark:text-amber-400";
+-  return "text-red-600 dark:text-red-400";
+-}
+-
+-/** Label tick for a given score value. */
+-function scoreLabel(value: number): string {
+-  if (value >= 95) return "Excellent";
+-  if (value >= 75) return "Good";
+-  if (value >= 50) return "Average";
+-  if (value >= 25) return "Below Avg";
+-  return "Poor";
+-}
+-
+-export default function Scoring() {
+-  const { id } = useParams<{ id: string }>();
+-  const navigate = useNavigate();
+-  const decisionId = id ? parseInt(id) : 0;
+-
+-  const { data, loading, error: fetchError } = useDecision(id);
+-  const {
+-    scores,
+-    updateScore,
+-    submit,
+-    submitting,
+-    error: submitError,
+-  } = useScoring(decisionId);
+-
+-  const [prePopulated, setPrePopulated] = useState(false);
+-  const [navigating, setNavigating] = useState(false);
+-  const [aiStatus, setAiStatus] = useState<AIAvailability | null>(null);
+-  const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
+-  const [drafts, setDrafts] = useState<ScoreDraft[]>([]);
+-  const [selectedDraftIds, setSelectedDraftIds] = useState<number[]>([]);
+-  const [aiBusy, setAiBusy] = useState(false);
+-  const [aiMessage, setAiMessage] = useState<string | null>(null);
+-  const [manualEvidenceClaims, setManualEvidenceClaims] = useState<Record<string, string>>({});
+-  const [draftEditScores, setDraftEditScores] = useState<Record<number, number>>({});
+-
+-  // ── Pre-populate sliders from existing scores in data.rows ──
+-  useEffect(() => {
+-    if (!data || !data.rows || !data.metrics.length || prePopulated) return;
+-
+-    const nameToId = new Map<string, number>(
+-      data.metrics.map((m) => [m.name, m.id]),
+-    );
+-
+-    let found = false;
+-    data.rows.forEach((row) => {
+-      const metricId = nameToId.get(row.metric_name);
+-      if (!metricId) return;
+-      const entries = Object.entries(row.scores);
+-      if (entries.length === 0) return;
+-      found = true;
+-      entries.forEach(([actIdStr, score]) => {
+-        updateScore(Number(actIdStr), metricId, score);
+-      });
+-    });
+-
+-    setPrePopulated(found);
+-  }, [data, prePopulated, updateScore]);
+-
+-  const refreshEvidenceDrafts = async () => {
+-    if (!decisionId) return;
+-    const [evidenceRes, draftsRes] = await Promise.all([
+-      api.getEvidence(decisionId),
+-      api.getScoreDrafts(decisionId),
+-    ]);
+-    setEvidence(evidenceRes.evidence);
+-    setDrafts(draftsRes.drafts);
+-  };
+-
+-  useEffect(() => {
+-    if (!decisionId) return;
+-    api.getAIStatus().then(setAiStatus).catch(() => setAiStatus(null));
+-    refreshEvidenceDrafts().catch(() => undefined);
+-  }, [decisionId]);
+-
+-  // ── Handlers ──
+-  const handleScoreChange = (
+-    activityId: number,
+-    metricId: number,
+-    value: number[],
+-  ) => {
+-    updateScore(activityId, metricId, value[0]);
+-  };
+-
+-  const handleSubmit = async () => {
+-    const result = await submit();
+-    if (result && decisionId) {
+-      setNavigating(true);
+-      navigate(`/decisions/${decisionId}/result`);
+-    }
+-  };
+-
+-  const handleDraftEvidence = async () => {
+-    setAiBusy(true);
+-    setAiMessage(null);
+-    try {
+-      const res = await api.draftEvidenceWithAI(decisionId, {});
+-      await refreshEvidenceDrafts();
+-      setAiMessage(`Drafted ${res.evidence_items.length} pending evidence item(s).`);
+-    } catch (err) {
+-      setAiMessage(err instanceof Error ? err.message : "AI evidence drafting failed");
+-    } finally {
+-      setAiBusy(false);
+-    }
+-  };
+-
+-  const handleSuggestScores = async () => {
+-    setAiBusy(true);
+-    setAiMessage(null);
+-    try {
+-      const res = await api.suggestScoresWithAI(decisionId, { evidence_review_policy: "approved_and_pending" });
+-      await refreshEvidenceDrafts();
+-      setAiMessage(`Created ${res.score_drafts.length} pending score draft(s).`);
+-    } catch (err) {
+-      setAiMessage(err instanceof Error ? err.message : "AI score drafting failed");
+-    } finally {
+-      setAiBusy(false);
+-    }
+-  };
+-
+-  const handleApplySelected = async () => {
+-    if (!selectedDraftIds.length) return;
+-    const res = await api.applyScoreDrafts(decisionId, selectedDraftIds);
+-    res.scores.forEach((score) => updateScore(score.activity_id, score.metric_id, score.score));
+-    setSelectedDraftIds([]);
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const handleApplyDraft = async (draft: ScoreDraft) => {
+-    if (draftEditScores[draft.id] !== undefined && draftEditScores[draft.id] !== draft.effective_score) {
+-      await api.updateScoreDraft(decisionId, draft.id, { human_adjusted_score: draftEditScores[draft.id] });
+-    }
+-    const res = await api.applyScoreDraft(decisionId, draft.id);
+-    updateScore(res.score.activity_id, res.score.metric_id, res.score.score);
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const handleRejectDraft = async (draft: ScoreDraft) => {
+-    await api.rejectScoreDraft(decisionId, draft.id);
+-    setSelectedDraftIds((ids) => ids.filter((id) => id !== draft.id));
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const pendingEvidenceCount = evidence.filter((e) => e.review_status === "pending").length;
+-  const pendingDraftCount = drafts.filter((d) => d.status !== "applied" && d.status !== "rejected").length;
+-
+-  const handleApproveAllEvidence = async () => {
+-    const pending = evidence.filter((e) => e.review_status === "pending");
+-    for (const item of pending) {
+-      await api.approveEvidence(decisionId, item.id);
+-    }
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const handleRejectAllEvidence = async () => {
+-    const pending = evidence.filter((e) => e.review_status === "pending");
+-    for (const item of pending) {
+-      await api.rejectEvidence(decisionId, item.id);
+-    }
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const handleApplyAllDrafts = async () => {
+-    const eligible = drafts.filter((d) => d.status !== "applied" && d.status !== "rejected");
+-    for (const draft of eligible) {
+-      if (draftEditScores[draft.id] !== undefined && draftEditScores[draft.id] !== draft.effective_score) {
+-        await api.updateScoreDraft(decisionId, draft.id, { human_adjusted_score: draftEditScores[draft.id] });
+-      }
+-    }
+-    const ids = eligible.map((d) => d.id);
+-    if (!ids.length) return;
+-    const res = await api.applyScoreDrafts(decisionId, ids);
+-    res.scores.forEach((score) => updateScore(score.activity_id, score.metric_id, score.score));
+-    setSelectedDraftIds([]);
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const handleRejectAllDrafts = async () => {
+-    const eligible = drafts.filter((d) => d.status !== "applied" && d.status !== "rejected");
+-    for (const draft of eligible) {
+-      await api.rejectScoreDraft(decisionId, draft.id);
+-    }
+-    setSelectedDraftIds([]);
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const handleAddEvidence = async (activityId: number, metricId: number) => {
+-    const key = `${activityId}_${metricId}`;
+-    const claim = (manualEvidenceClaims[key] || "").trim();
+-    if (!claim) return;
+-    await api.createEvidence(decisionId, { activity_id: activityId, metric_id: metricId, claim });
+-    setManualEvidenceClaims((prev) => ({ ...prev, [key]: "" }));
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  const handleReviewEvidence = async (item: EvidenceItem, action: "approve" | "reject") => {
+-    if (action === "approve") await api.approveEvidence(decisionId, item.id);
+-    else await api.rejectEvidence(decisionId, item.id);
+-    await refreshEvidenceDrafts();
+-  };
+-
+-  // ── Loading state ──
+-  if (loading) {
+-    return (
+-      <div className="flex justify-center items-center py-20">
+-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+-      </div>
+-    );
+-  }
+-
+-  // ── Error state ──
+-  if (fetchError) {
+-    return (
+-      <div className="container mx-auto py-8 px-4">
+-        <Alert variant="destructive">
+-          <AlertDescription>{fetchError}</AlertDescription>
+-        </Alert>
+-      </div>
+-    );
+-  }
+-
+-  if (!data) return null;
+-
+-  const { activities, metrics } = data;
+-  const renderCellReview = (actId: number, metricId: number) => {
+-    const key = `${actId}_${metricId}`;
+-    const cellEvidence = evidence.filter((item) => (!item.activity_id || item.activity_id === actId) && (!item.metric_id || item.metric_id === metricId));
+-    const cellDrafts = drafts.filter((draft) => draft.activity_id === actId && draft.metric_id === metricId && draft.status !== "applied" && draft.status !== "rejected");
+-
+-    return (
+-      <div className="mt-2 space-y-2 text-xs">
+-        <div className="flex gap-1">
+-          <Input
+-            value={manualEvidenceClaims[key] ?? ""}
+-            onChange={(e) => setManualEvidenceClaims((prev) => ({ ...prev, [key]: e.target.value }))}
+-            placeholder="Add evidence"
+-            className="h-7 text-xs"
+-          />
+-          <Button size="sm" variant="outline" onClick={() => handleAddEvidence(actId, metricId)}>Add</Button>
+-        </div>
+-        {cellEvidence.map((item) => (
+-          <div key={item.id} className="rounded border bg-muted/30 p-1 space-y-1">
+-            <div><Badge variant="outline" className="mr-1 text-[10px]">{item.review_status}</Badge>{item.claim}</div>
+-            {item.review_status === "pending" && (
+-              <div className="flex gap-1">
+-                <Button size="sm" variant="outline" onClick={() => handleReviewEvidence(item, "approve")}>Approve evidence</Button>
+-                <Button size="sm" variant="ghost" onClick={() => handleReviewEvidence(item, "reject")}>Reject</Button>
+-              </div>
+-            )}
+-          </div>
+-        ))}
+-        {cellDrafts.map((draft) => (
+-          <div key={draft.id} className="rounded border p-1 space-y-1">
+-            <label className="flex items-center gap-1">
+-              <input
+-                type="checkbox"
+-                checked={selectedDraftIds.includes(draft.id)}
+-                onChange={(e) => setSelectedDraftIds((ids) => e.target.checked ? [...ids, draft.id] : ids.filter((id) => id !== draft.id))}
+-              />
+-              <span>Draft {Math.round(draft.effective_score)} ({draft.status})</span>
+-            </label>
+-            <div className="flex flex-wrap gap-1">
+-              <Input
+-                type="number"
+-                min={0}
+-                max={100}
+-                value={draftEditScores[draft.id] ?? draft.effective_score}
+-                onChange={(e) => setDraftEditScores((prev) => ({ ...prev, [draft.id]: Number(e.target.value) }))}
+-                className="h-7 w-20 text-xs"
+-                aria-label="Draft score"
+-              />
+-              <Button size="sm" variant="outline" onClick={() => handleApplyDraft(draft)}>Apply</Button>
+-              <Button size="sm" variant="ghost" onClick={() => handleRejectDraft(draft)}>Reject</Button>
+-            </div>
+-          </div>
+-        ))}
+-      </div>
+-    );
+-  };
+-
+-  return (
+-    <div className="container mx-auto py-8 px-4 max-w-6xl space-y-8">
+-      <div>
+-        <h1 className="text-3xl font-bold">Score Your Alternatives</h1>
+-        <p className="text-muted-foreground mt-1">{data.decision.query}</p>
+-        <p className="text-sm text-muted-foreground mt-2">
+-          Every slider is a 0–100 fit score. Higher always means better fit.
+-        </p>
+-      </div>
+-
+-      {/* Submit Error */}
+-      {submitError && (
+-        <Alert variant="destructive">
+-          <AlertDescription>{submitError}</AlertDescription>
+-        </Alert>
+-      )}
+-
+-      <Card>
+-        <CardHeader>
+-          <CardTitle className="text-lg">AI draft assistance</CardTitle>
+-        </CardHeader>
+-        <CardContent className="space-y-3">
+-          <p className="text-sm text-muted-foreground">
+-            AI-generated values are drafts until you approve or apply them.
+-          </p>
+-          {!aiStatus?.enabled && (
+-            <Alert>
+-              <AlertDescription>
+-                AI assistance is unavailable ({aiStatus?.reason ?? "disabled"}). Final scoring still works normally.
+-              </AlertDescription>
+-            </Alert>
+-          )}
+-          {aiMessage && <p className="text-sm text-muted-foreground">{aiMessage}</p>}
+-          <div className="flex flex-wrap gap-2">
+-            <Button variant="outline" onClick={handleDraftEvidence} disabled={!aiStatus?.enabled || aiBusy}>
+-              Draft evidence with AI
+-            </Button>
+-            <Button variant="outline" onClick={handleSuggestScores} disabled={!aiStatus?.enabled || aiBusy}>
+-              Suggest draft scores
+-            </Button>
+-            <Button onClick={handleApplySelected} disabled={!selectedDraftIds.length}>
+-              Apply selected drafts
+-            </Button>
+-          </div>
+-          {(pendingEvidenceCount > 0 || pendingDraftCount > 0) && (
+-            <div className="flex flex-wrap gap-2 pt-2 border-t">
+-              {pendingEvidenceCount > 0 && (
+-                <>
+-                  <Button size="sm" variant="outline" onClick={handleApproveAllEvidence}>
+-                    Approve All Evidence ({pendingEvidenceCount})
+-                  </Button>
+-                  <Button size="sm" variant="ghost" onClick={handleRejectAllEvidence}>
+-                    Reject All Evidence ({pendingEvidenceCount})
+-                  </Button>
+-                </>
+-              )}
+-              {pendingDraftCount > 0 && (
+-                <>
+-                  <Button size="sm" variant="outline" onClick={handleApplyAllDrafts}>
+-                    Apply All Drafts ({pendingDraftCount})
+-                  </Button>
+-                  <Button size="sm" variant="ghost" onClick={handleRejectAllDrafts}>
+-                    Reject All Drafts ({pendingDraftCount})
+-                  </Button>
+-                </>
+-              )}
+-            </div>
+-          )}
+-        </CardContent>
+-      </Card>
+-
+-      {/* ── Desktop: grid / table layout ── */}
+-      <div className="hidden md:block">
+-        <div className="rounded-lg border">
+-          {/* Header row */}
+-          <div className="grid grid-cols-[200px_repeat(auto-fit,minmax(180px,1fr))] border-b bg-muted/50">
+-            <div className="p-3 text-sm font-semibold text-muted-foreground">
+-              Criterion
+-            </div>
+-            {activities.map((act) => (
+-              <div
+-                key={act.id}
+-                className="p-3 text-sm font-semibold text-center"
+-              >
+-                {act.name}
+-              </div>
+-            ))}
+-          </div>
+-
+-          {/* Data rows */}
+-          {metrics.map((metric) => (
+-            <div
+-              key={metric.id}
+-              className="grid grid-cols-[200px_repeat(auto-fit,minmax(180px,1fr))] border-b last:border-b-0 hover:bg-muted/30 transition-colors"
+-            >
+-              {/* Row header — metric info */}
+-              <div className="p-3 flex flex-col justify-center min-w-0">
+-                <div className="flex items-center gap-2">
+-                  <span className="text-sm font-medium truncate">{metric.name}</span>
+-                  {metric.scope === "decision" && (
+-                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+-                      Custom
+-                    </span>
+-                  )}
+-                </div>
+-                <span className="text-xs text-muted-foreground truncate">
+-                  {metric.description}
+-                </span>
+-                {metric.anchors ? (
+-                  <span className="text-xs text-muted-foreground">
+-                    0: {metric.anchors.low} · 50: {metric.anchors.mid} · 100: {metric.anchors.high}
+-                  </span>
+-                ) : null}
+-              </div>
+-
+-              {/* Per-alternative slider cells */}
+-              {activities.map((act) => {
+-                const val = scores[`${act.id}_${metric.id}`] ?? 0;
+-                return (
+-                  <div key={`${act.id}_${metric.id}`} className="p-3">
+-                    <div className="flex items-center gap-3">
+-                      <Slider
+-                        value={[val]}
+-                        onValueChange={(v) =>
+-                          handleScoreChange(act.id, metric.id, v)
+-                        }
+-                        min={0}
+-                        max={100}
+-                        step={1}
+-                        className="flex-1"
+-                      />
+-                      <div className="flex flex-col items-center shrink-0 w-14">
+-                        <span
+-                          className={`text-sm font-mono tabular-nums ${scoreColor(val)}`}
+-                        >
+-                          {val}
+-                        </span>
+-                        <span className="text-[10px] text-muted-foreground leading-tight">
+-                          {scoreLabel(val)}
+-                        </span>
+-                      </div>
+-                    </div>
+-                    {renderCellReview(act.id, metric.id)}
+-                  </div>
+-                );
+-              })}
+-            </div>
+-          ))}
+-        </div>
+-      </div>
+-
+-      {/* ── Mobile: stacked by alternative ── */}
+-      <div className="md:hidden space-y-6">
+-        {activities.map((act) => (
+-          <Card key={act.id}>
+-            <CardHeader>
+-              <CardTitle className="text-lg">{act.name}</CardTitle>
+-            </CardHeader>
+-            <CardContent className="space-y-5">
+-              {metrics.map((metric) => {
+-                const val = scores[`${act.id}_${metric.id}`] ?? 0;
+-                return (
+-                  <div key={`${act.id}_${metric.id}`} className="space-y-2">
+-                    <div className="flex items-center justify-between">
+-                      <div className="flex items-center gap-2 min-w-0">
+-                        <span className="text-sm font-medium truncate">{metric.name}</span>
+-                        {metric.scope === "decision" && (
+-                          <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+-                            Custom
+-                          </span>
+-                        )}
+-                      </div>
+-                      <div className="flex items-center gap-1 shrink-0">
+-                        <span
+-                          className={`text-sm font-mono tabular-nums ${scoreColor(val)}`}
+-                        >
+-                          {val}
+-                        </span>
+-                        <Badge
+-                          variant="outline"
+-                          className="text-[10px] px-1.5 py-0 h-5"
+-                        >
+-                          {scoreLabel(val)}
+-                        </Badge>
+-                      </div>
+-                    </div>
+-                    <Slider
+-                      value={[val]}
+-                      onValueChange={(v) =>
+-                        handleScoreChange(act.id, metric.id, v)
+-                      }
+-                      min={0}
+-                      max={100}
+-                      step={1}
+-                    />
+-                    <div className="flex justify-between text-[10px] text-muted-foreground">
+-                      <span>{metric.anchors?.low ?? "Poor fit"}</span>
+-                      <span>{metric.anchors?.mid ?? "Partial fit"}</span>
+-                      <span>{metric.anchors?.high ?? "Excellent fit"}</span>
+-                    </div>
+-                    {renderCellReview(act.id, metric.id)}
+-                  </div>
+-                );
+-              })}
+-            </CardContent>
+-          </Card>
+-        ))}
+-      </div>
+-
+-      {/* ── Submit ── */}
+-      <div className="flex justify-end">
+-        <Button
+-          onClick={handleSubmit}
+-          disabled={submitting || navigating}
+-          size="lg"
+-        >
+-          {submitting || navigating ? (
+-            <>
+-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+-              {submitting ? "Submitting..." : "Navigating..."}
+-            </>
+-          ) : (
+-            <>
+-              Submit Scores
+-              <ArrowRight className="ml-2 h-4 w-4" />
+-            </>
+-          )}
+-        </Button>
+-      </div>
+-    </div>
+-  );
+-}
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index aedf53c..0f729f7 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -23,6 +23,7 @@ import type {
+   AIMetricRecommendation,
+   AIEvidenceResponse,
+   AIScoreDraftResponse,
++  AIResultSummaryResponse,
+ } from "@/types";
+ 
+ const API_BASE = "/api";
+@@ -34,7 +35,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
+   });
+   if (!res.ok) {
+     const body = await res.json().catch(() => ({ detail: res.statusText }));
+-    throw new Error(body.detail || `Request failed: ${res.status}`);
++    const detail = body.detail || `Request failed: ${res.status}`;
++    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+   }
+   return res.json();
+ }
+@@ -223,4 +225,8 @@ export const api = {
+   applyScoreDrafts(decisionId: number, draftIds: number[]): Promise<{ status: string; applied_draft_ids: number[]; scores: Array<{ id: number; activity_id: number; metric_id: number; score: number }> }> {
+     return request(`/decisions/${decisionId}/score-drafts/apply`, { method: "POST", body: JSON.stringify({ draft_ids: draftIds }) });
+   },
++
++  generateResultSummary(decisionId: number): Promise<AIResultSummaryResponse> {
++    return request(`/decisions/${decisionId}/ai/summary`, { method: "POST", body: JSON.stringify({}) });
++  },
+ };
+diff --git a/frontend/src/types/index.ts b/frontend/src/types/index.ts
+index fcbe115..0a70367 100644
+--- a/frontend/src/types/index.ts
++++ b/frontend/src/types/index.ts
+@@ -416,3 +416,7 @@ export interface AIEvidenceResponse {
+   missing_context_questions: string[];
+   skipped: Array<{ reason: string }>;
+ }
++
++export interface AIResultSummaryResponse {
++  summary: string;
++}
+diff --git a/routers/api.py b/routers/api.py
+index f176530..2e66d2b 100644
+--- a/routers/api.py
++++ b/routers/api.py
+@@ -223,6 +223,30 @@ def _decision_metric_ids(decision_id: int, db: Session) -> set[int]:
+     return {m.id for m in db.query(Metric).filter(or_(Metric.decision_id == decision_id, Metric.decision_id.is_(None))).all()}
+ 
+ 
++def _expected_score_pairs(activity_ids: set[int], metric_ids: set[int]) -> set[tuple[int, int]]:
++    return {(activity_id, metric_id) for activity_id in activity_ids for metric_id in metric_ids}
++
++
++def _missing_score_detail(
++    missing_pairs: set[tuple[int, int]],
++    activities_by_id: dict[int, Activity],
++    metrics_by_id: dict[int, Metric],
++) -> dict:
++    missing_scores = [
++        {
++            "activity_id": activity_id,
++            "activity_name": activities_by_id.get(activity_id).name if activities_by_id.get(activity_id) else None,
++            "metric_id": metric_id,
++            "metric_name": metrics_by_id.get(metric_id).name if metrics_by_id.get(metric_id) else None,
++        }
++        for activity_id, metric_id in sorted(missing_pairs)
++    ]
++    return {
++        "message": f"Missing scores for {len(missing_scores)} activity/metric pair(s)",
++        "missing_scores": missing_scores,
++    }
++
++
+ def _optional_scoped_activity(value, decision_id: int, db: Session) -> int | None:
+     if value is None:
+         return None
+@@ -348,6 +372,35 @@ def _set_ai_draft_evidence(
+         seen.add(evidence_id)
+ 
+ 
++def _validate_ai_draft_evidence_ids(
++    decision_id: int,
++    activity_id: int,
++    metric_id: int,
++    evidence_ids: list,
++    allowed_evidence_statuses: set[str],
++    db: Session,
++) -> list[int]:
++    if not isinstance(evidence_ids, list):
++        raise ValueError("evidence_ids must be a list")
++    result = []
++    seen = set()
++    for evidence_id in evidence_ids:
++        if not isinstance(evidence_id, int) or isinstance(evidence_id, bool):
++            raise ValueError("evidence_ids must contain integers")
++        if evidence_id in seen:
++            continue
++        evidence = _get_evidence_or_404(decision_id, evidence_id, db)
++        if evidence.review_status not in allowed_evidence_statuses:
++            raise ValueError("Evidence review status is not allowed by evidence_review_policy")
++        if evidence.activity_id is not None and evidence.activity_id != activity_id:
++            raise ValueError("Evidence activity scope does not match draft")
++        if evidence.metric_id is not None and evidence.metric_id != metric_id:
++            raise ValueError("Evidence metric scope does not match draft")
++        result.append(evidence_id)
++        seen.add(evidence_id)
++    return result
++
++
+ def _apply_draft(draft: ScoreDraft, db: Session) -> AlternativeScore:
+     _ensure_draft_mutable(draft)
+     if draft.activity_id not in _decision_activity_ids(draft.decision_id, db):
+@@ -890,6 +943,16 @@ def score_decision(
+         .filter(DecisionWeight.decision_id == decision_id)
+         .all()
+     }
++    if not activity_ids:
++        raise HTTPException(status_code=422, detail="No activities found for this decision")
++    if not selected_metric_ids:
++        raise HTTPException(status_code=422, detail="No selected metrics found for this decision")
++    activities_by_id = {activity.id: activity for activity in activities}
++    metrics_by_id = {
++        metric.id: metric
++        for metric in db.query(Metric).filter(Metric.id.in_(selected_metric_ids)).all()
++    }
++    expected_pairs = _expected_score_pairs(activity_ids, selected_metric_ids)
+ 
+     validated_scores = []
+     seen_scores = set()
+@@ -925,6 +988,13 @@ def score_decision(
+             {"activity_id": activity_id, "metric_id": metric_id, "score": score}
+         )
+ 
++    missing_pairs = expected_pairs - seen_scores
++    if missing_pairs:
++        raise HTTPException(
++            status_code=422,
++            detail=_missing_score_detail(missing_pairs, activities_by_id, metrics_by_id),
++        )
++
+     for activity in activities:
+         db.query(AlternativeScore).filter(
+             AlternativeScore.activity_id == activity.id
+@@ -1484,17 +1554,28 @@ def ai_optimize_weights(decision_id: int, body: dict, db: Session = Depends(get_
+ def ai_draft_evidence(decision_id: int, body: dict, db: Session = Depends(get_db)):
+     decision = _get_decision_or_404(decision_id, db)
+     caps = get_ai_caps()
+-    max_items = _validate_ai_max_field(body, "max_items", caps["max_evidence_items_per_request"])
+     all_activity_ids = _decision_activity_ids(decision_id, db)
+     all_metric_ids = _decision_metric_ids(decision_id, db)
+     allowed_activity_ids = _validate_ai_id_filter(body, "activity_ids", all_activity_ids)
+     allowed_metric_ids = _validate_ai_id_filter(body, "metric_ids", all_metric_ids)
+     include_general = _validate_ai_bool_field(body, "include_general_evidence", True)
++    expected_pairs = _expected_score_pairs(allowed_activity_ids, allowed_metric_ids)
++    max_items_cap = max(caps["max_evidence_items_per_request"], len(expected_pairs) or 1)
++    max_items = _validate_ai_max_field(body, "max_items", max_items_cap)
++    if expected_pairs:
++        max_items = max(max_items, len(expected_pairs))
+     activities = db.query(Activity).filter(Activity.id.in_(allowed_activity_ids)).all() if allowed_activity_ids else []
+     metrics = db.query(Metric).filter(Metric.id.in_(allowed_metric_ids)).all() if allowed_metric_ids else []
+     output = _ai_call_or_error(build_decision_context(
+         decision, activities, metrics, body.get("user_context") or "",
+-        instruction="Return JSON only. Draft evidence items (claims with supporting rationale) for scoring the given alternatives on the given metrics. Each evidence_item must have: activity_id, metric_id, claim, rationale, confidence (0-1), polarity (positive/negative/neutral/mixed). Include missing_context_questions if you need more context.",
++        instruction=(
++            "Return JSON only. Draft evidence items (claims with supporting rationale) for scoring the given "
++            "alternatives on the given metrics. Use the EXACT activity_id and metric_id values from the "
++            "decision context above. When specific activities and metrics are provided, include at least one "
++            "evidence_item for every requested activity/metric pair. Each evidence_item must have: activity_id, "
++            "metric_id, claim, rationale, confidence (0-1), polarity (positive/negative/neutral/mixed). "
++            "Include missing_context_questions if you need more context."
++        ),
+     ))
+     items = output.get("evidence_items", [])
+     if not isinstance(items, list):
+@@ -1544,7 +1625,6 @@ def ai_draft_evidence(decision_id: int, body: dict, db: Session = Depends(get_db
+ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db)):
+     decision = _get_decision_or_404(decision_id, db)
+     caps = get_ai_caps()
+-    max_drafts = _validate_ai_max_field(body, "max_drafts", caps["max_score_drafts_per_request"])
+     all_activity_ids = _decision_activity_ids(decision_id, db)
+     all_metric_ids = _decision_metric_ids(decision_id, db)
+     if not all_activity_ids:
+@@ -1553,19 +1633,35 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
+         raise HTTPException(status_code=422, detail="No metrics found for this decision")
+     allowed_activity_ids = _validate_ai_id_filter(body, "activity_ids", all_activity_ids)
+     allowed_metric_ids = _validate_ai_id_filter(body, "metric_ids", all_metric_ids)
++    expected_pairs = _expected_score_pairs(allowed_activity_ids, allowed_metric_ids)
++    max_drafts_cap = max(caps["max_score_drafts_per_request"], len(expected_pairs) or 1)
++    max_drafts = _validate_ai_max_field(body, "max_drafts", max_drafts_cap)
++    if expected_pairs:
++        max_drafts = max(max_drafts, len(expected_pairs))
+     evidence_policy = _enum_field(body.get("evidence_review_policy"), AI_EVIDENCE_REVIEW_POLICIES, "evidence_review_policy", "approved_and_pending")
+     allowed_evidence_statuses = {"approved"} if evidence_policy == "approved_only" else {"approved", "pending"}
+     activities = db.query(Activity).filter(Activity.id.in_(allowed_activity_ids)).all()
+     metrics = db.query(Metric).filter(Metric.id.in_(allowed_metric_ids)).all()
++    activities_by_id = {activity.id: activity for activity in activities}
++    metrics_by_id = {metric.id: metric for metric in metrics}
+     output = _ai_call_or_error(build_decision_context(
+         decision, activities, metrics, body.get("user_context") or "",
+-        instruction="Return JSON only. Use the EXACT activity_id and metric_id values from the decision context above. Suggest scores (0-100) for each activity on each metric based on available evidence. Each score_draft must have: activity_id (integer, must match one of the IDs provided above), metric_id (integer, must match one of the IDs provided above), suggested_score (0-100), rationale, confidence (0-1), evidence_ids (list of applicable evidence item IDs). Return an empty score_drafts array only if there is truly nothing to suggest.",
++        instruction=(
++            "Return JSON only. Use the EXACT activity_id and metric_id values from the decision context above. "
++            "Suggest exactly one score_draft for EVERY requested activity/metric pair. Do not omit any pair. "
++            "Scores must be 0-100 and should be based on available evidence. Each score_draft must have: "
++            "activity_id (integer, must match one of the IDs provided above), metric_id (integer, must match one "
++            "of the IDs provided above), suggested_score (0-100), rationale, confidence (0-1), evidence_ids "
++            "(list of applicable evidence item IDs). Return an empty score_drafts array only if there are no "
++            "requested activity/metric pairs."
++        ),
+     ))
+     raw_drafts = output.get("score_drafts", [])
+     if not isinstance(raw_drafts, list):
+         raise HTTPException(status_code=502, detail="AI provider returned malformed output")
+     created = []
+     skipped = []
++    seen_pairs = set()
+     for raw in raw_drafts[:max_drafts]:
+         try:
+             if not isinstance(raw, dict):
+@@ -1578,6 +1674,17 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
+                 raise ValueError("activity_id is outside requested filters")
+             if metric_id not in allowed_metric_ids:
+                 raise ValueError("metric_id is outside requested filters")
++            pair = (activity_id, metric_id)
++            if pair in seen_pairs:
++                raise ValueError("duplicate score draft for activity/metric pair")
++            evidence_ids = _validate_ai_draft_evidence_ids(
++                decision_id,
++                activity_id,
++                metric_id,
++                raw.get("evidence_ids", []),
++                allowed_evidence_statuses,
++                db,
++            )
+             draft = ScoreDraft(
+                 decision_id=decision_id,
+                 activity_id=activity_id,
+@@ -1591,10 +1698,19 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
+             )
+             db.add(draft)
+             db.flush()
+-            _set_ai_draft_evidence(draft, raw.get("evidence_ids", []), allowed_evidence_statuses, db)
++            for evidence_id in evidence_ids:
++                db.add(ScoreDraftEvidence(score_draft_id=draft.id, evidence_item_id=evidence_id))
+             created.append(draft)
++            seen_pairs.add(pair)
+         except (HTTPException, ValueError) as exc:
+             skipped.append({"reason": getattr(exc, "detail", str(exc))})
++    missing_pairs = expected_pairs - seen_pairs
++    if missing_pairs:
++        db.rollback()
++        detail = _missing_score_detail(missing_pairs, activities_by_id, metrics_by_id)
++        detail["message"] = f"AI provider omitted scores for {len(missing_pairs)} activity/metric pair(s)"
++        detail["skipped"] = skipped
++        raise HTTPException(status_code=502, detail=detail)
+     if not created:
+         parts = ["AI provider returned no valid score drafts"]
+         if not raw_drafts:
+@@ -1608,6 +1724,48 @@ def ai_suggest_scores(decision_id: int, body: dict, db: Session = Depends(get_db
+     return {"score_drafts": [_draft_serializer(draft, db) for draft in created], "warnings": output.get("warnings", []) if isinstance(output.get("warnings", []), list) else [], "skipped": skipped}
+ 
+ 
++@router.post("/decisions/{decision_id}/ai/summary")
++def ai_result_summary(decision_id: int, body: dict, db: Session = Depends(get_db)):
++    decision = _get_decision_or_404(decision_id, db)
++    detail = _build_decision_detail(decision_id, db)
++    evidence = (
++        db.query(EvidenceItem)
++        .filter(EvidenceItem.decision_id == decision_id)
++        .filter(EvidenceItem.review_status != "rejected")
++        .order_by(EvidenceItem.id.asc())
++        .all()
++    )
++    output = _ai_call_or_error(build_decision_context(
++        decision,
++        db.query(Activity).filter(Activity.decision_id == decision_id).all(),
++        db.query(Metric).filter(Metric.id.in_(_decision_metric_ids(decision_id, db))).all(),
++        body.get("user_context") or "",
++        instruction=(
++            "Return JSON only with a top-level string field named summary. Summarize the final decision results "
++            "for the user in 2-4 concise paragraphs. Mention the leading alternative, the main criteria that drove "
++            "the result, important tradeoffs, KO/threshold effects if present, and whether the evidence appears strong "
++            "or limited. Do not invent facts beyond the provided data. Use this decision data: "
++            + json.dumps({
++                "decision": detail.get("decision"),
++                "activities": detail.get("activities", []),
++                "metrics": detail.get("metrics", []),
++                "weights": detail.get("weights", []),
++                "results": detail.get("results", []),
++                "rows": detail.get("rows", []),
++                "ko_result": detail.get("ko_result"),
++                "ko_criteria": detail.get("ko_criteria"),
++                "thresholds": detail.get("thresholds"),
++                "filter_result": detail.get("filter_result"),
++                "evidence": [_evidence_serializer(item) for item in evidence],
++            }, default=str)
++        ),
++    ))
++    summary = output.get("summary")
++    if not isinstance(summary, str) or not summary.strip():
++        raise HTTPException(status_code=502, detail="AI provider returned no summary")
++    return {"summary": summary.strip()[:4000]}
++
++
+ def custom_metric_serializer(metric: Metric) -> dict:
+     """Serialize a custom metric using the scope-aware serializer."""
+     return serialize_metric_metadata(metric)
+diff --git a/tests/test_routes.py b/tests/test_routes.py
+index b0cbc36..0efa6a3 100644
+--- a/tests/test_routes.py
++++ b/tests/test_routes.py
+@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
+ 
+ from database import Base, get_db
+ from main import app
+-from models import AlternativeScore, Decision, Metric
++from models import AlternativeScore, Decision, Metric, ScoreDraft
+ from services.decision_limits import MAX_DECISION_ALTERNATIVES, MAX_DECISION_METRICS
+ from services.ontology import (
+     FIT_SCORE_EXPORT_EXPLANATION,
+@@ -302,17 +302,23 @@ def test_api_score_rejects_foreign_activity_before_deleting_existing_scores(clie
+     decision_id, metric_id = _create_decision_with_metric(client, db)
+     other_decision_id, _ = _create_decision_with_metric(client, db, query="Train or Bus?")
+ 
+-    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
++    detail = client.get(f"/api/decisions/{decision_id}").json()
++    activity_id = detail["activities"][0]["id"]
+     other_activity_id = client.get(f"/api/decisions/{other_decision_id}").json()[
+         "activities"
+     ][0]["id"]
+ 
+     valid = client.post(
+         f"/api/decisions/{decision_id}/score",
+-        json={"scores": [{"activity_id": activity_id, "metric_id": metric_id, "score": 70}]},
++        json={
++            "scores": [
++                {"activity_id": activity["id"], "metric_id": metric_id, "score": 70}
++                for activity in detail["activities"]
++            ]
++        },
+     )
+     assert valid.status_code == 200
+-    assert db.query(AlternativeScore).count() == 1
++    assert db.query(AlternativeScore).count() == len(detail["activities"])
+ 
+     invalid = client.post(
+         f"/api/decisions/{decision_id}/score",
+@@ -323,7 +329,7 @@ def test_api_score_rejects_foreign_activity_before_deleting_existing_scores(clie
+         },
+     )
+     assert invalid.status_code == 422
+-    assert db.query(AlternativeScore).count() == 1
++    assert db.query(AlternativeScore).count() == len(detail["activities"])
+ 
+ 
+ def test_api_score_rejects_unselected_metric(client, db):
+@@ -392,14 +398,20 @@ def test_api_score_rejects_duplicate_score_entries_before_deleting_existing_scor
+     from models import AlternativeScore
+ 
+     decision_id, metric_id = _create_decision_with_metric(client, db)
+-    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
++    detail = client.get(f"/api/decisions/{decision_id}").json()
++    activity_id = detail["activities"][0]["id"]
+ 
+     valid = client.post(
+         f"/api/decisions/{decision_id}/score",
+-        json={"scores": [{"activity_id": activity_id, "metric_id": metric_id, "score": 70}]},
++        json={
++            "scores": [
++                {"activity_id": activity["id"], "metric_id": metric_id, "score": 70}
++                for activity in detail["activities"]
++            ]
++        },
+     )
+     assert valid.status_code == 200
+-    assert db.query(AlternativeScore).count() == 1
++    assert db.query(AlternativeScore).count() == len(detail["activities"])
+ 
+     duplicate = client.post(
+         f"/api/decisions/{decision_id}/score",
+@@ -412,7 +424,30 @@ def test_api_score_rejects_duplicate_score_entries_before_deleting_existing_scor
+     )
+ 
+     assert duplicate.status_code == 422
+-    assert db.query(AlternativeScore).count() == 1
++    assert db.query(AlternativeScore).count() == len(detail["activities"])
++
++
++def test_api_score_rejects_partial_matrix_before_deleting_existing_scores(client, db):
++    decision_id, metric_id = _create_decision_with_metric(client, db)
++    detail = client.get(f"/api/decisions/{decision_id}").json()
++    full_scores = [
++        {"activity_id": activity["id"], "metric_id": metric_id, "score": 70}
++        for activity in detail["activities"]
++    ]
++    valid = client.post(f"/api/decisions/{decision_id}/score", json={"scores": full_scores})
++    assert valid.status_code == 200
++    assert db.query(AlternativeScore).count() == len(detail["activities"])
++
++    partial = client.post(
++        f"/api/decisions/{decision_id}/score",
++        json={"scores": [full_scores[0]]},
++    )
++
++    assert partial.status_code == 422
++    payload = partial.json()["detail"]
++    assert payload["message"].startswith("Missing scores")
++    assert len(payload["missing_scores"]) == len(detail["activities"]) - 1
++    assert db.query(AlternativeScore).count() == len(detail["activities"])
+ 
+ 
+ def test_decide_empty_query(client, db):
+@@ -2802,7 +2837,17 @@ class TestEvidenceAndScoreDrafts:
+         assert resp.status_code == 200
+         decision_id = resp.json()["decision_id"]
+         detail = client.get(f"/api/decisions/{decision_id}").json()
+-        return decision_id, detail["activities"][0]["id"], detail["metrics"][0]["id"]
++        metric_id = detail["metrics"][0]["id"]
++        refine = client.post(
++            f"/api/decisions/{decision_id}/refine",
++            json={
++                "alternatives": ["Option A"],
++                "metrics": [{"metric_id": metric_id, "weight": 80}],
++            },
++        )
++        assert refine.status_code == 200
++        detail = client.get(f"/api/decisions/{decision_id}").json()
++        return decision_id, detail["activities"][0]["id"], metric_id
+ 
+     def test_ai_status_disabled_does_not_expose_key(self, client, monkeypatch):
+         monkeypatch.setenv("AI_ENABLED", "true")
+@@ -2972,7 +3017,7 @@ class TestEvidenceAndScoreDrafts:
+         assert [item["suggested_score"] for item in drafts.json()["score_drafts"]] == [72]
+         assert len(drafts.json()["skipped"]) == 1
+ 
+-    def test_ai_filters_and_evidence_review_policy_are_enforced(self, client, monkeypatch):
++    def test_ai_filters_and_evidence_review_policy_are_enforced(self, client, db, monkeypatch):
+         resp = client.post("/api/decide", json={"q": "Option A vs Option B"})
+         decision_id = resp.json()["decision_id"]
+         detail = client.get(f"/api/decisions/{decision_id}").json()
+@@ -3029,6 +3074,7 @@ class TestEvidenceAndScoreDrafts:
+         draft_payload = draft_resp.json()
+         assert [item["suggested_score"] for item in draft_payload["score_drafts"]] == [81]
+         assert len(draft_payload["skipped"]) == 3
++        assert db.query(ScoreDraft).count() == 1
+ 
+     def test_patch_any_pending_or_approved_draft_edit_marks_edited(self, client):
+         decision_id, activity_id, metric_id = self._decision_cell(client)
+@@ -3044,3 +3090,51 @@ class TestEvidenceAndScoreDrafts:
+         )
+         assert edited.status_code == 200
+         assert edited.json()["status"] == "edited"
++
++    def test_ai_score_suggestions_must_cover_every_requested_cell(self, client, db, monkeypatch):
++        decision_id, metric_id = _create_decision_with_metric(client, db)
++        detail = client.get(f"/api/decisions/{decision_id}").json()
++        first_activity_id = detail["activities"][0]["id"]
++        monkeypatch.setenv("AI_ENABLED", "true")
++        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
++
++        def fake_scores(_prompt):
++            return {
++                "score_drafts": [
++                    {"activity_id": first_activity_id, "metric_id": metric_id, "suggested_score": 80},
++                ]
++            }
++
++        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_scores(prompt))
++        response = client.post(f"/api/decisions/{decision_id}/ai/suggest-scores", json={})
++
++        assert response.status_code == 502
++        payload = response.json()["detail"]
++        assert payload["message"].startswith("AI provider omitted scores")
++        assert len(payload["missing_scores"]) == len(detail["activities"]) - 1
++        assert db.query(ScoreDraft).count() == 0
++
++    def test_ai_result_summary_returns_generated_summary(self, client, db, monkeypatch):
++        decision_id, metric_id = _create_decision_with_metric(client, db)
++        detail = client.get(f"/api/decisions/{decision_id}").json()
++        score_response = client.post(
++            f"/api/decisions/{decision_id}/score",
++            json={
++                "scores": [
++                    {"activity_id": activity["id"], "metric_id": metric_id, "score": 80}
++                    for activity in detail["activities"]
++                ]
++            },
++        )
++        assert score_response.status_code == 200
++        monkeypatch.setenv("AI_ENABLED", "true")
++        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
++        monkeypatch.setattr(
++            "routers.api.OpenAIDecisionClient.structured_json",
++            lambda self, prompt: {"summary": "House leads because it has the stronger weighted fit."},
++        )
++
++        response = client.post(f"/api/decisions/{decision_id}/ai/summary", json={})
++
++        assert response.status_code == 200
++        assert response.json()["summary"].startswith("House leads")

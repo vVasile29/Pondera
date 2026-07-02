@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useDecision } from "@/hooks/useDecision";
 import { useScoring } from "@/hooks/useScoring";
@@ -23,7 +23,7 @@ import {
   CheckCheck,
   Sparkles,
 } from "lucide-react";
-import type { AIAvailability, AIMetricSuggestion, AIMetricRecommendation, Metric, ScoreDraft } from "@/types";
+import type { AIAvailability, AIMetricSuggestion, AIMetricRecommendation, Metric, ScoreDraft, EvidenceItem } from "@/types";
 
 const DIMENSION_ORDER = [
   "Resource Fit",
@@ -51,6 +51,32 @@ const FIT_CATEGORY_OPTIONS = [
   "People Fit",
   "Practical Fit",
 ];
+
+function AIContextField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="user-context" className="text-sm font-medium">
+        Context for AI (optional)
+      </Label>
+      <textarea
+        id="user-context"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
+        className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+      <p className="text-xs text-muted-foreground">
+        This context is sent with every AI request across all steps.
+      </p>
+    </div>
+  );
+}
 
 export default function Review() {
   const { id } = useParams<{ id: string }>();
@@ -85,7 +111,6 @@ export default function Review() {
   const [step, setStep] = useState(1);
   const [aiStatus, setAiStatus] = useState<AIAvailability | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<AIMetricSuggestion[]>([]);
-  const [selectedSuggestionIndexes, setSelectedSuggestionIndexes] = useState<number[]>([]);
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, AIMetricRecommendation>>({});
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
@@ -94,7 +119,6 @@ export default function Review() {
   const {
     scores: scoreValues,
     updateScore,
-    submit: submitScores,
     submitting: scoresSubmitting,
     error: scoresError,
   } = useScoring(parseInt(id || "0"));
@@ -176,24 +200,65 @@ export default function Review() {
     setScoresPrePopulated(found);
   }, [step, scoresPrePopulated, data, updateScore]);
 
-  // ── AI Score Drafts (Step 3) ──
-  const [aiScoreDrafts, setAiScoreDrafts] = useState<Record<string, ScoreDraft>>({});
+  // ── Evidence + AI Score Drafts (Step 3) ──
+  const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
+  const [scoreDrafts, setScoreDrafts] = useState<ScoreDraft[]>([]);
+  const [manualEvidenceClaims, setManualEvidenceClaims] = useState<Record<string, string>>({});
+  const [draftEditScores, setDraftEditScores] = useState<Record<number, number>>({});
+
+  const refreshEvidenceDrafts = useCallback(async () => {
+    if (!id) return;
+    const decisionId = parseInt(id);
+    const [evidenceRes, draftsRes] = await Promise.all([
+      api.getEvidence(decisionId),
+      api.getScoreDrafts(decisionId),
+    ]);
+    setEvidence(evidenceRes.evidence);
+    setScoreDrafts(draftsRes.drafts);
+  }, [id]);
+
+  useEffect(() => {
+    if (step !== 3) return;
+    refreshEvidenceDrafts().catch(() => undefined);
+  }, [step, refreshEvidenceDrafts]);
+
+  const handleDraftEvidence = async () => {
+    if (!id || !data) return;
+    const selectedMetricIds = data.metrics.filter((m) => includedMetrics[m.id]).map((m) => m.id);
+    setAiBusy(true);
+    setAiMessage(null);
+    try {
+      const res = await api.draftEvidenceWithAI(parseInt(id), {
+        user_context: userContext || undefined,
+        activity_ids: data.activities.map((a) => a.id),
+        metric_ids: selectedMetricIds,
+        include_general_evidence: false,
+        max_items: Math.max(1, data.activities.length * selectedMetricIds.length),
+      });
+      await refreshEvidenceDrafts();
+      setAiMessage(`AI drafted ${res.evidence_items.length} pending evidence item(s).`);
+    } catch (e: any) {
+      setAiMessage(e.message || "AI evidence drafting failed.");
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   const handleSuggestScores = async () => {
-    if (!id) return;
+    if (!id || !data) return;
+    const selectedMetricIds = data.metrics.filter((m) => includedMetrics[m.id]).map((m) => m.id);
     setAiBusy(true);
     setAiMessage(null);
     try {
       const res = await api.suggestScoresWithAI(parseInt(id), {
         user_context: userContext || undefined,
+        activity_ids: data.activities.map((a) => a.id),
+        metric_ids: selectedMetricIds,
         evidence_review_policy: "approved_and_pending",
+        max_drafts: Math.max(1, data.activities.length * selectedMetricIds.length),
       });
-      const drafts: Record<string, ScoreDraft> = {};
-      for (const draft of res.score_drafts) {
-        drafts[`${draft.activity_id}_${draft.metric_id}`] = draft;
-      }
-      setAiScoreDrafts(drafts);
-      setAiMessage(`AI suggested ${res.score_drafts.length} score(s).`);
+      await refreshEvidenceDrafts();
+      setAiMessage(`AI created ${res.score_drafts.length} pending score draft(s).`);
     } catch (e: any) {
       setAiMessage(e.message || "AI score suggestion failed.");
     } finally {
@@ -201,21 +266,52 @@ export default function Review() {
     }
   };
 
-  const handleApplyScoreDraft = (draft: ScoreDraft) => {
-    updateScore(draft.activity_id, draft.metric_id, draft.suggested_score);
-    setAiScoreDrafts((prev) => {
+  const handleApplyScoreDraft = async (draft: ScoreDraft) => {
+    if (!id) return;
+    const decisionId = parseInt(id);
+    const editedScore = draftEditScores[draft.id];
+    if (editedScore !== undefined && editedScore !== draft.effective_score) {
+      await api.updateScoreDraft(decisionId, draft.id, { human_adjusted_score: editedScore });
+    }
+    const res = await api.applyScoreDraft(decisionId, draft.id);
+    updateScore(res.score.activity_id, res.score.metric_id, res.score.score);
+    setDraftEditScores((prev) => {
       const next = { ...prev };
-      delete next[`${draft.activity_id}_${draft.metric_id}`];
+      delete next[draft.id];
       return next;
     });
+    await refreshEvidenceDrafts();
   };
 
-  const handleRejectScoreDraft = (activityId: number, metricId: number) => {
-    setAiScoreDrafts((prev) => {
+  const handleRejectScoreDraft = async (draft: ScoreDraft) => {
+    if (!id) return;
+    await api.rejectScoreDraft(parseInt(id), draft.id);
+    setDraftEditScores((prev) => {
       const next = { ...prev };
-      delete next[`${activityId}_${metricId}`];
+      delete next[draft.id];
       return next;
     });
+    await refreshEvidenceDrafts();
+  };
+
+  const handleAddEvidence = async (activityId: number, metricId: number) => {
+    if (!id) return;
+    const key = `${activityId}_${metricId}`;
+    const claim = (manualEvidenceClaims[key] || "").trim();
+    if (!claim) return;
+    await api.createEvidence(parseInt(id), { activity_id: activityId, metric_id: metricId, claim });
+    setManualEvidenceClaims((prev) => ({ ...prev, [key]: "" }));
+    await refreshEvidenceDrafts();
+  };
+
+  const handleReviewEvidence = async (item: EvidenceItem, action: "approve" | "reject") => {
+    if (!id) return;
+    if (action === "approve") {
+      await api.approveEvidence(parseInt(id), item.id);
+    } else {
+      await api.rejectEvidence(parseInt(id), item.id);
+    }
+    await refreshEvidenceDrafts();
   };
 
   // Group all metrics by dimension category, sorted in ontology order
@@ -425,8 +521,7 @@ export default function Review() {
     try {
       const res = await api.suggestMetricsWithAI(parseInt(id), { user_context: userContext || undefined });
       setAiSuggestions(res.metric_suggestions);
-      setSelectedSuggestionIndexes(res.metric_suggestions.map((_, index) => index));
-      setAiMessage(`AI suggested ${res.metric_suggestions.length} criteria. Select the ones to add.`);
+      setAiMessage(`AI suggested ${res.metric_suggestions.length} criteria. Review each row and accept or reject it.`);
     } catch (e: any) {
       setAiMessage(e.message || "AI metric suggestion failed.");
     } finally {
@@ -438,44 +533,42 @@ export default function Review() {
     setAiSuggestions((prev) => prev.map((suggestion, i) => i === index ? { ...suggestion, ...patch } : suggestion));
   };
 
-  const handleCreateSelectedSuggestions = async () => {
+  const handleAcceptSuggestion = async (index: number) => {
     if (!id) return;
+    const suggestion = aiSuggestions[index];
+    if (!suggestion) return;
     setAiBusy(true);
     try {
       const decisionId = parseInt(id);
       const existingNames = new Set((data?.metrics ?? []).map((m) => m.name.toLowerCase()));
-      let added = 0;
-      let skipped = 0;
-      for (const index of selectedSuggestionIndexes) {
-        const suggestion = aiSuggestions[index];
-        if (!suggestion) continue;
-        if (existingNames.has(suggestion.name.trim().toLowerCase())) {
-          skipped++;
-          continue;
-        }
-        const created = await api.createCustomMetric(decisionId, {
-          name: suggestion.name.trim(),
-          category: suggestion.category.trim(),
-          description: suggestion.description || suggestion.why_it_matters,
-          weight: suggestion.recommended_weight ?? 50,
-        });
-        existingNames.add(created.name.toLowerCase());
-        setMetricWeights((prev) => ({ ...prev, [created.id]: suggestion.recommended_weight ?? 50 }));
-        setIncludedMetrics((prev) => ({ ...prev, [created.id]: true }));
-        added++;
+      if (existingNames.has(suggestion.name.trim().toLowerCase())) {
+        setAiSuggestions((prev) => prev.filter((_, i) => i !== index));
+        setAiMessage(`Skipped "${suggestion.name}" because it already exists.`);
+        return;
       }
-      setAiSuggestions([]);
-      setSelectedSuggestionIndexes([]);
+      const created = await api.createCustomMetric(decisionId, {
+        name: suggestion.name.trim(),
+        category: suggestion.category.trim(),
+        description: suggestion.description || suggestion.why_it_matters,
+        weight: suggestion.recommended_weight ?? 50,
+      });
+      setMetricWeights((prev) => ({ ...prev, [created.id]: suggestion.recommended_weight ?? 50 }));
+      setIncludedMetrics((prev) => ({ ...prev, [created.id]: true }));
+      setKoThresholds((prev) => ({ ...prev, [created.id]: null }));
+      setAiSuggestions((prev) => prev.filter((_, i) => i !== index));
       await refetch();
-      const parts: string[] = [];
-      if (added > 0) parts.push(`Added ${added} custom metric(s).`);
-      if (skipped > 0) parts.push(`${skipped} already exist(s).`);
-      setAiMessage(parts.length > 0 ? parts.join(" ") : "No new metrics to add.");
+      setAiMessage(`Added "${created.name}".`);
     } catch (e: any) {
-      setAiMessage(e.message || "Failed to add AI suggestions.");
+      setAiMessage(e.message || "Failed to add AI suggestion.");
     } finally {
       setAiBusy(false);
     }
+  };
+
+  const handleRejectSuggestion = (index: number) => {
+    const rejected = aiSuggestions[index]?.name;
+    setAiSuggestions((prev) => prev.filter((_, i) => i !== index));
+    if (rejected) setAiMessage(`Rejected "${rejected}".`);
   };
 
   const handleOptimizeWeights = async () => {
@@ -577,6 +670,8 @@ export default function Review() {
         ko_criteria: koPayload.length > 0 ? koPayload : undefined,
       });
 
+      setScoresPrePopulated(false);
+      await refetch();
       setStep(3);
     } catch (e: any) {
       setSubmitError(e.message || "Failed to save. Please try again.");
@@ -590,10 +685,19 @@ export default function Review() {
   const handleFinalSubmit = async () => {
     setSubmitError(null);
 
-    if (!id) return;
+    if (!id || !data) return;
+    const selectedMetrics = data.metrics.filter((m) => includedMetrics[m.id]);
+    const scores = data.activities.flatMap((activity) =>
+      selectedMetrics.map((metric) => ({
+        activity_id: activity.id,
+        metric_id: metric.id,
+        score: scoreValues[`${activity.id}_${metric.id}`] ?? 0,
+      })),
+    );
+
     setSubmitting(true);
     try {
-      await submitScores();
+      await api.submitScores(parseInt(id), scores);
       navigate(`/decisions/${parseInt(id)}/result`);
     } catch (e: any) {
       setSubmitError(e.message || "Failed to submit scores.");
@@ -624,7 +728,95 @@ export default function Review() {
 
   if (!data) return null;
 
-  const decisionId = parseInt(id || "0");
+  const renderCellReview = (activityId: number, metricId: number) => {
+    const key = `${activityId}_${metricId}`;
+    const cellEvidence = evidence.filter(
+      (item) =>
+        (!item.activity_id || item.activity_id === activityId) &&
+        (!item.metric_id || item.metric_id === metricId),
+    );
+    const cellDrafts = scoreDrafts.filter(
+      (draft) =>
+        draft.activity_id === activityId &&
+        draft.metric_id === metricId &&
+        draft.status !== "applied" &&
+        draft.status !== "rejected",
+    );
+
+    return (
+      <div className="mt-2 space-y-2 text-xs">
+        <div className="flex gap-1">
+          <Input
+            value={manualEvidenceClaims[key] ?? ""}
+            onChange={(e) =>
+              setManualEvidenceClaims((prev) => ({ ...prev, [key]: e.target.value }))
+            }
+            placeholder="Add evidence"
+            className="h-7 text-xs"
+          />
+          <Button size="sm" variant="outline" onClick={() => handleAddEvidence(activityId, metricId)}>
+            Add
+          </Button>
+        </div>
+
+        {cellEvidence.map((item) => (
+          <div key={item.id} className="rounded border bg-muted/30 p-1.5 space-y-1">
+            <div className="flex flex-wrap items-start gap-1">
+              <Badge variant="outline" className="mr-1 text-[10px]">
+                {item.review_status}
+              </Badge>
+              <span>{item.claim}</span>
+            </div>
+            {item.rationale && (
+              <p className="text-[10px] text-muted-foreground">{item.rationale}</p>
+            )}
+            {item.review_status === "pending" && (
+              <div className="flex gap-1">
+                <Button size="sm" variant="outline" className="h-6 text-[10px] px-1.5" onClick={() => handleReviewEvidence(item, "approve")}>
+                  Approve evidence
+                </Button>
+                <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5" onClick={() => handleReviewEvidence(item, "reject")}>
+                  Reject
+                </Button>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {cellDrafts.map((draft) => (
+          <div key={draft.id} className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-1.5 space-y-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-blue-700 dark:text-blue-300">AI score draft</span>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                value={draftEditScores[draft.id] ?? draft.effective_score}
+                onChange={(e) =>
+                  setDraftEditScores((prev) => ({
+                    ...prev,
+                    [draft.id]: Number(e.target.value),
+                  }))
+                }
+                className="h-7 w-20 text-xs border-blue-200 dark:border-blue-800"
+                aria-label="Draft score"
+              />
+              <Button size="sm" variant="outline" className="h-6 text-[10px] px-1.5 ml-auto" onClick={() => handleApplyScoreDraft(draft)}>
+                Apply
+              </Button>
+              <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5" onClick={() => handleRejectScoreDraft(draft)}>
+                Reject
+              </Button>
+            </div>
+            {draft.rationale && (
+              <p className="text-[10px] text-blue-700 dark:text-blue-300">{draft.rationale}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const stepLabels = ["Set Criteria", "Set Weights", "Score"];
 
   return (
@@ -688,14 +880,8 @@ export default function Review() {
         <>
           {/* ── User context (shared for all AI calls) ── */}
           <Card>
-            <CardHeader>
-              <CardTitle className="text-xl">Context for AI</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <textarea id="user-context" value={userContext} onChange={(e) => setUserContext(e.target.value)}
-                placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
-                className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
-              <p className="text-xs text-muted-foreground mt-1">This context is sent with every AI request across all steps.</p>
+            <CardContent className="pt-6">
+              <AIContextField value={userContext} onChange={setUserContext} />
             </CardContent>
           </Card>
 
@@ -783,19 +969,20 @@ export default function Review() {
                       .filter((g) => g.dimension === dimension)
                       .map(({ items }) =>
                         items.map(({ index, suggestion }) => (
-                          <div key={`ai-preview-${index}`} className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-2.5 flex items-start gap-2">
-                            <Checkbox
-                              checked={selectedSuggestionIndexes.includes(index)}
-                              onCheckedChange={(checked) =>
-                                setSelectedSuggestionIndexes((prev) =>
-                                  checked ? [...prev, index] : prev.filter((i) => i !== index)
-                                )
-                              }
-                            />
-                            <div className="grid flex-1 gap-1.5 sm:grid-cols-[1fr_1fr_5rem]">
+                          <div key={`ai-preview-${index}`} className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-2.5 space-y-2">
+                            <div className="grid gap-1.5 sm:grid-cols-[1fr_1fr_5rem]">
                               <Input value={suggestion.name} onChange={(e) => updateAiSuggestion(index, { name: e.target.value })} aria-label="Name" className="h-8 text-xs border-blue-200 dark:border-blue-800" />
                               <Input value={suggestion.category} onChange={(e) => updateAiSuggestion(index, { category: e.target.value })} aria-label="Category" className="h-8 text-xs border-blue-200 dark:border-blue-800" />
                               <Input type="number" min={0} max={100} value={suggestion.recommended_weight} onChange={(e) => updateAiSuggestion(index, { recommended_weight: Number(e.target.value) })} aria-label="Weight" className="h-8 text-xs border-blue-200 dark:border-blue-800" />
+                            </div>
+                            {(suggestion.description || suggestion.why_it_matters) && (
+                              <p className="text-xs text-blue-700 dark:text-blue-300">
+                                {suggestion.description || suggestion.why_it_matters}
+                              </p>
+                            )}
+                            <div className="flex justify-end gap-1.5">
+                              <Button size="sm" variant="outline" className="h-7 text-xs px-2" disabled={aiBusy} onClick={() => handleAcceptSuggestion(index)}>Accept</Button>
+                              <Button size="sm" variant="ghost" className="h-7 text-xs px-2" disabled={aiBusy} onClick={() => handleRejectSuggestion(index)}>Reject</Button>
                             </div>
                           </div>
                         )),
@@ -813,11 +1000,6 @@ export default function Review() {
                   <Button variant="outline" size="sm" onClick={handleSuggestMetrics} disabled={!aiStatus?.enabled || aiBusy}>
                     {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Suggesting...</> : <><Sparkles className="h-4 w-4 mr-1" /> Suggest metrics with AI</>}
                   </Button>
-                  {aiSuggestions.length > 0 && (
-                    <Button size="sm" onClick={handleCreateSelectedSuggestions} disabled={aiBusy || !selectedSuggestionIndexes.length}>
-                      {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Creating...</> : `Add selected (${selectedSuggestionIndexes.length})`}
-                    </Button>
-                  )}
                   <Button variant="outline" size="sm" onClick={() => { resetAddForm(); setShowAddCustomForm(true); }}>
                     <Plus className="h-4 w-4 mr-1" /> Add Custom Metric
                   </Button>
@@ -900,13 +1082,7 @@ export default function Review() {
             </CardHeader>
             <CardContent className="space-y-6">
               {/* ── User context (shared for all AI calls) ── */}
-              <div className="space-y-2">
-                <Label htmlFor="user-context" className="text-sm font-medium">Context for AI (optional)</Label>
-                <textarea id="user-context" value={userContext} onChange={(e) => setUserContext(e.target.value)}
-                  placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
-                  className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
-                <p className="text-xs text-muted-foreground">This context is sent with every AI request across all steps.</p>
-              </div>
+              <AIContextField value={userContext} onChange={setUserContext} />
 
               <p className="text-sm text-muted-foreground">
                 Every slider is a 0–100 fit score. Higher always means better fit.
@@ -1010,26 +1186,20 @@ export default function Review() {
             </CardHeader>
             <CardContent className="space-y-6">
               {/* ── User context (shared for all AI calls) ── */}
-              <div className="space-y-2">
-                <Label htmlFor="user-context" className="text-sm font-medium">Context for AI (optional)</Label>
-                <textarea id="user-context" value={userContext} onChange={(e) => setUserContext(e.target.value)}
-                  placeholder="e.g. I'm a first-time home buyer in Seattle with a family of four looking for good schools..."
-                  className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
-                <p className="text-xs text-muted-foreground">This context is sent with every AI request across all steps.</p>
-              </div>
+              <AIContextField value={userContext} onChange={setUserContext} />
 
               <p className="text-sm text-muted-foreground">
                 Every slider is a 0–100 fit score. Higher always means better fit.
               </p>
 
-              {/* ── AI Score Suggestions ── */}
+              {/* ── AI Evidence + Score Suggestions ── */}
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" onClick={handleSuggestScores} disabled={!aiStatus?.enabled || aiBusy} size="sm">
-                  {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Suggesting...</> : <><Sparkles className="h-4 w-4 mr-1" /> Suggest scores with AI</>}
+                <Button variant="outline" onClick={handleDraftEvidence} disabled={!aiStatus?.enabled || aiBusy} size="sm">
+                  {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Working...</> : <><Sparkles className="h-4 w-4 mr-1" /> Draft evidence with AI</>}
                 </Button>
-                {Object.keys(aiScoreDrafts).length > 0 && (
-                  <Button variant="ghost" size="sm" onClick={() => setAiScoreDrafts({})}>Clear all</Button>
-                )}
+                <Button variant="outline" onClick={handleSuggestScores} disabled={!aiStatus?.enabled || aiBusy} size="sm">
+                  {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Working...</> : <><Sparkles className="h-4 w-4 mr-1" /> Suggest scores with AI</>}
+                </Button>
                 {!aiStatus?.enabled && (
                   <span className="text-xs text-muted-foreground">AI assistance is unavailable ({aiStatus?.reason ?? "disabled"}).</span>
                 )}
@@ -1058,7 +1228,6 @@ export default function Review() {
                       </div>
                       {data.activities.map((act) => {
                         const val = scoreValues[`${act.id}_${metric.id}`] ?? 0;
-                        const draft = aiScoreDrafts[`${act.id}_${metric.id}`];
                         return (
                           <div key={`${act.id}_${metric.id}`} className="p-3">
                             <div className="flex items-center gap-3">
@@ -1068,14 +1237,7 @@ export default function Review() {
                                 <span className="text-[10px] text-muted-foreground leading-tight">{scoreLabel(val)}</span>
                               </div>
                             </div>
-                            {draft && (
-                              <div className="mt-1.5 rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-1.5 flex items-center gap-1.5">
-                                <span className="text-xs text-blue-700 dark:text-blue-300">AI: <strong>{draft.suggested_score}</strong></span>
-                                {draft.rationale && <span className="text-[10px] text-blue-500 truncate max-w-[120px]">{draft.rationale}</span>}
-                                <Button size="sm" variant="outline" className="h-5 text-[10px] px-1.5 ml-auto" onClick={() => handleApplyScoreDraft(draft)}>Apply</Button>
-                                <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5" onClick={() => handleRejectScoreDraft(act.id, metric.id)}>Reject</Button>
-                              </div>
-                            )}
+                            {renderCellReview(act.id, metric.id)}
                           </div>
                         );
                       })}
@@ -1092,7 +1254,6 @@ export default function Review() {
                     <CardContent className="space-y-5">
                       {data.metrics.filter((m) => includedMetrics[m.id]).map((metric) => {
                         const val = scoreValues[`${act.id}_${metric.id}`] ?? 0;
-                        const draft = aiScoreDrafts[`${act.id}_${metric.id}`];
                         return (
                           <div key={`${act.id}_${metric.id}`} className="space-y-2">
                             <div className="flex items-center justify-between">
@@ -1103,13 +1264,7 @@ export default function Review() {
                               </div>
                             </div>
                             <Slider value={[val]} onValueChange={(v) => updateScore(act.id, metric.id, v[0])} min={0} max={100} step={1} />
-                            {draft && (
-                              <div className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-1.5 flex items-center gap-1.5">
-                                <span className="text-xs text-blue-700 dark:text-blue-300">AI: <strong>{draft.suggested_score}</strong></span>
-                                <Button size="sm" variant="outline" className="h-5 text-[10px] px-1.5 ml-auto" onClick={() => handleApplyScoreDraft(draft)}>Apply</Button>
-                                <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5" onClick={() => handleRejectScoreDraft(act.id, metric.id)}>Reject</Button>
-                              </div>
-                            )}
+                            {renderCellReview(act.id, metric.id)}
                           </div>
                         );
                       })}

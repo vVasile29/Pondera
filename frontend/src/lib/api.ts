@@ -23,6 +23,7 @@ import type {
   AIMetricRecommendation,
   AIEvidenceResponse,
   AIScoreDraftResponse,
+  AIResultSummaryResponse,
 } from "@/types";
 
 const API_BASE = "/api";
@@ -34,7 +35,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(body.detail || `Request failed: ${res.status}`);
+    const detail = body.detail || `Request failed: ${res.status}`;
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return res.json();
 }
@@ -222,5 +224,9 @@ export const api = {
 
   applyScoreDrafts(decisionId: number, draftIds: number[]): Promise<{ status: string; applied_draft_ids: number[]; scores: Array<{ id: number; activity_id: number; metric_id: number; score: number }> }> {
     return request(`/decisions/${decisionId}/score-drafts/apply`, { method: "POST", body: JSON.stringify({ draft_ids: draftIds }) });
+  },
+
+  generateResultSummary(decisionId: number): Promise<AIResultSummaryResponse> {
+    return request(`/decisions/${decisionId}/ai/summary`, { method: "POST", body: JSON.stringify({}) });
   },
 };

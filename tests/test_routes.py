@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, get_db
 from main import app
-from models import AlternativeScore, Decision, Metric
+from models import AlternativeScore, Decision, Metric, ScoreDraft
 from services.decision_limits import MAX_DECISION_ALTERNATIVES, MAX_DECISION_METRICS
 from services.ontology import (
     FIT_SCORE_EXPORT_EXPLANATION,
@@ -302,17 +302,23 @@ def test_api_score_rejects_foreign_activity_before_deleting_existing_scores(clie
     decision_id, metric_id = _create_decision_with_metric(client, db)
     other_decision_id, _ = _create_decision_with_metric(client, db, query="Train or Bus?")
 
-    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
+    detail = client.get(f"/api/decisions/{decision_id}").json()
+    activity_id = detail["activities"][0]["id"]
     other_activity_id = client.get(f"/api/decisions/{other_decision_id}").json()[
         "activities"
     ][0]["id"]
 
     valid = client.post(
         f"/api/decisions/{decision_id}/score",
-        json={"scores": [{"activity_id": activity_id, "metric_id": metric_id, "score": 70}]},
+        json={
+            "scores": [
+                {"activity_id": activity["id"], "metric_id": metric_id, "score": 70}
+                for activity in detail["activities"]
+            ]
+        },
     )
     assert valid.status_code == 200
-    assert db.query(AlternativeScore).count() == 1
+    assert db.query(AlternativeScore).count() == len(detail["activities"])
 
     invalid = client.post(
         f"/api/decisions/{decision_id}/score",
@@ -323,7 +329,7 @@ def test_api_score_rejects_foreign_activity_before_deleting_existing_scores(clie
         },
     )
     assert invalid.status_code == 422
-    assert db.query(AlternativeScore).count() == 1
+    assert db.query(AlternativeScore).count() == len(detail["activities"])
 
 
 def test_api_score_rejects_unselected_metric(client, db):
@@ -392,14 +398,20 @@ def test_api_score_rejects_duplicate_score_entries_before_deleting_existing_scor
     from models import AlternativeScore
 
     decision_id, metric_id = _create_decision_with_metric(client, db)
-    activity_id = client.get(f"/api/decisions/{decision_id}").json()["activities"][0]["id"]
+    detail = client.get(f"/api/decisions/{decision_id}").json()
+    activity_id = detail["activities"][0]["id"]
 
     valid = client.post(
         f"/api/decisions/{decision_id}/score",
-        json={"scores": [{"activity_id": activity_id, "metric_id": metric_id, "score": 70}]},
+        json={
+            "scores": [
+                {"activity_id": activity["id"], "metric_id": metric_id, "score": 70}
+                for activity in detail["activities"]
+            ]
+        },
     )
     assert valid.status_code == 200
-    assert db.query(AlternativeScore).count() == 1
+    assert db.query(AlternativeScore).count() == len(detail["activities"])
 
     duplicate = client.post(
         f"/api/decisions/{decision_id}/score",
@@ -412,7 +424,30 @@ def test_api_score_rejects_duplicate_score_entries_before_deleting_existing_scor
     )
 
     assert duplicate.status_code == 422
-    assert db.query(AlternativeScore).count() == 1
+    assert db.query(AlternativeScore).count() == len(detail["activities"])
+
+
+def test_api_score_rejects_partial_matrix_before_deleting_existing_scores(client, db):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    detail = client.get(f"/api/decisions/{decision_id}").json()
+    full_scores = [
+        {"activity_id": activity["id"], "metric_id": metric_id, "score": 70}
+        for activity in detail["activities"]
+    ]
+    valid = client.post(f"/api/decisions/{decision_id}/score", json={"scores": full_scores})
+    assert valid.status_code == 200
+    assert db.query(AlternativeScore).count() == len(detail["activities"])
+
+    partial = client.post(
+        f"/api/decisions/{decision_id}/score",
+        json={"scores": [full_scores[0]]},
+    )
+
+    assert partial.status_code == 422
+    payload = partial.json()["detail"]
+    assert payload["message"].startswith("Missing scores")
+    assert len(payload["missing_scores"]) == len(detail["activities"]) - 1
+    assert db.query(AlternativeScore).count() == len(detail["activities"])
 
 
 def test_decide_empty_query(client, db):
@@ -2802,7 +2837,17 @@ class TestEvidenceAndScoreDrafts:
         assert resp.status_code == 200
         decision_id = resp.json()["decision_id"]
         detail = client.get(f"/api/decisions/{decision_id}").json()
-        return decision_id, detail["activities"][0]["id"], detail["metrics"][0]["id"]
+        metric_id = detail["metrics"][0]["id"]
+        refine = client.post(
+            f"/api/decisions/{decision_id}/refine",
+            json={
+                "alternatives": ["Option A"],
+                "metrics": [{"metric_id": metric_id, "weight": 80}],
+            },
+        )
+        assert refine.status_code == 200
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        return decision_id, detail["activities"][0]["id"], metric_id
 
     def test_ai_status_disabled_does_not_expose_key(self, client, monkeypatch):
         monkeypatch.setenv("AI_ENABLED", "true")
@@ -2972,7 +3017,7 @@ class TestEvidenceAndScoreDrafts:
         assert [item["suggested_score"] for item in drafts.json()["score_drafts"]] == [72]
         assert len(drafts.json()["skipped"]) == 1
 
-    def test_ai_filters_and_evidence_review_policy_are_enforced(self, client, monkeypatch):
+    def test_ai_filters_and_evidence_review_policy_are_enforced(self, client, db, monkeypatch):
         resp = client.post("/api/decide", json={"q": "Option A vs Option B"})
         decision_id = resp.json()["decision_id"]
         detail = client.get(f"/api/decisions/{decision_id}").json()
@@ -3029,6 +3074,7 @@ class TestEvidenceAndScoreDrafts:
         draft_payload = draft_resp.json()
         assert [item["suggested_score"] for item in draft_payload["score_drafts"]] == [81]
         assert len(draft_payload["skipped"]) == 3
+        assert db.query(ScoreDraft).count() == 1
 
     def test_patch_any_pending_or_approved_draft_edit_marks_edited(self, client):
         decision_id, activity_id, metric_id = self._decision_cell(client)
@@ -3044,3 +3090,51 @@ class TestEvidenceAndScoreDrafts:
         )
         assert edited.status_code == 200
         assert edited.json()["status"] == "edited"
+
+    def test_ai_score_suggestions_must_cover_every_requested_cell(self, client, db, monkeypatch):
+        decision_id, metric_id = _create_decision_with_metric(client, db)
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        first_activity_id = detail["activities"][0]["id"]
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        def fake_scores(_prompt):
+            return {
+                "score_drafts": [
+                    {"activity_id": first_activity_id, "metric_id": metric_id, "suggested_score": 80},
+                ]
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_scores(prompt))
+        response = client.post(f"/api/decisions/{decision_id}/ai/suggest-scores", json={})
+
+        assert response.status_code == 502
+        payload = response.json()["detail"]
+        assert payload["message"].startswith("AI provider omitted scores")
+        assert len(payload["missing_scores"]) == len(detail["activities"]) - 1
+        assert db.query(ScoreDraft).count() == 0
+
+    def test_ai_result_summary_returns_generated_summary(self, client, db, monkeypatch):
+        decision_id, metric_id = _create_decision_with_metric(client, db)
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        score_response = client.post(
+            f"/api/decisions/{decision_id}/score",
+            json={
+                "scores": [
+                    {"activity_id": activity["id"], "metric_id": metric_id, "score": 80}
+                    for activity in detail["activities"]
+                ]
+            },
+        )
+        assert score_response.status_code == 200
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        monkeypatch.setattr(
+            "routers.api.OpenAIDecisionClient.structured_json",
+            lambda self, prompt: {"summary": "House leads because it has the stronger weighted fit."},
+        )
+
+        response = client.post(f"/api/decisions/{decision_id}/ai/summary", json={})
+
+        assert response.status_code == 200
+        assert response.json()["summary"].startswith("House leads")

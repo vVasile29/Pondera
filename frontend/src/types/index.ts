@@ -416,3 +416,7 @@ export interface AIEvidenceResponse {
   missing_context_questions: string[];
   skipped: Array<{ reason: string }>;
 }
+
+export interface AIResultSummaryResponse {
+  summary: string;
+}

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useDecision } from "@/hooks/useDecision";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +17,7 @@ import RadarChart from "@/components/RadarChart";
 import DecisionRobustnessCard from "@/components/DecisionRobustnessCard";
 import ThresholdPanel from "@/components/ThresholdPanel";
 import ExportButton from "@/components/ExportButton";
+import { api } from "@/lib/api";
 import type { FitResult, KoResult } from "@/types";
 import { filterResultsToSurvivors, recomputeFitScores } from "@/lib/scoring";
 
@@ -66,6 +67,9 @@ export default function Results() {
   const [metricWeights, setMetricWeights] = useState<Record<string, number>>(
     {},
   );
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
 
   const decisionId = id ? parseInt(id) : 0;
   const isSingle = (data?.activities?.length ?? 0) <= 1;
@@ -107,6 +111,34 @@ export default function Results() {
     return Math.max(...rankingResults.map((r) => r.fit_pct), 1);
   }, [rankingResults]);
 
+  useEffect(() => {
+    if (!decisionId || !hasScores) return;
+    let cancelled = false;
+
+    async function generateSummary() {
+      setAiSummaryLoading(true);
+      setAiSummaryError(null);
+      try {
+        const status = await api.getAIStatus();
+        if (!status.enabled) {
+          if (!cancelled) setAiSummary(null);
+          return;
+        }
+        const res = await api.generateResultSummary(decisionId);
+        if (!cancelled) setAiSummary(res.summary);
+      } catch (e: any) {
+        if (!cancelled) setAiSummaryError(e.message || "AI summary generation failed.");
+      } finally {
+        if (!cancelled) setAiSummaryLoading(false);
+      }
+    }
+
+    generateSummary();
+    return () => {
+      cancelled = true;
+    };
+  }, [decisionId, hasScores]);
+
   // ── Loading state ──
   if (loading) {
     return (
@@ -146,9 +178,9 @@ export default function Results() {
             <p className="text-sm text-muted-foreground">
               Score your alternatives to see the results.
             </p>
-            <Button onClick={() => navigate(`/decisions/${decisionId}/score`)}>
+            <Button onClick={() => navigate(`/decisions/${decisionId}/review`)}>
               <ArrowRight className="mr-2 h-4 w-4" />
-              Go to Scoring
+              Go to Review
             </Button>
           </CardContent>
         </Card>
@@ -171,13 +203,35 @@ export default function Results() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => navigate(`/decisions/${decisionId}/score`)}
+            onClick={() => navigate(`/decisions/${decisionId}/review`)}
           >
-            Re-score
+            Review / re-score
           </Button>
           <ExportButton decisionId={decisionId} />
         </div>
       </div>
+
+      {(aiSummaryLoading || aiSummary || aiSummaryError) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">AI Summary</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {aiSummaryLoading && (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generating summary…
+              </p>
+            )}
+            {!aiSummaryLoading && aiSummary && (
+              <p className="text-sm leading-6 whitespace-pre-line">{aiSummary}</p>
+            )}
+            {!aiSummaryLoading && aiSummaryError && !aiSummary && (
+              <p className="text-sm text-muted-foreground">{aiSummaryError}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── Ranking Cards ── */}
       <section className="space-y-3">
