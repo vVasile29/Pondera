@@ -439,3 +439,9 @@ def test_case_and_article_combined():
     """Combined article stripping and capitalization."""
     result = extract_alternatives("Should I Buy a Tesla or a Ford")
     assert result == ["Tesla", "Ford"]
+
+
+def test_shared_object_preserves_casing():
+    """Shared object from alt[1] should keep original casing (e.g. 'SAP S/4HANA')."""
+    result = extract_alternatives("Should we build or buy SAP S/4HANA?")
+    assert result == ["Build SAP S/4HANA", "Buy SAP S/4HANA"]

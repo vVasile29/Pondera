@@ -405,7 +405,7 @@ def extract_alternatives(query: str) -> List[str]:
             and alt1_words[0] in _decision_verbs
             and alt0_words[0] != alt1_words[0]
         ):
-            shared_obj = " ".join(alt1_words[1:])
+            shared_obj = " ".join(alternatives[1].split()[1:])
             alternatives[0] = f"{alternatives[0]} {shared_obj}"
 
     return alternatives
