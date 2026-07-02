@@ -5,6 +5,7 @@ Deterministic MCDA decision engine. All endpoints under /api/*.
 
 import json
 import math
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -24,7 +25,11 @@ from services.scoring import (
     sanitize_persisted_ko_criteria,
     sanitize_persisted_thresholds,
 )
-from services.ontology import RESERVED_LEGACY_METRIC_NAMES, serialize_metric_metadata
+from services.ontology import (
+    RESERVED_LEGACY_METRIC_NAMES,
+    ontology_metric_metadata,
+    serialize_metric_metadata,
+)
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -47,6 +52,12 @@ def _parse_thresholds(decision: Decision, db: Session) -> list:
 def _parse_ko_criteria(decision: Decision, db: Session) -> list:
     # DB-safety layer for malformed persisted KO criteria or manual edits.
     return sanitize_persisted_ko_criteria(decision.id, db)
+
+
+def _strip_custom_suffix(name: str) -> str:
+    """Strip trailing '(custom)' or '(custom N)' suffix from a metric name."""
+    stripped = re.sub(r'\s*\(custom(?:\s+\d+)?\)\s*$', '', name)
+    return stripped.rstrip()
 
 
 def _validate_metric_id(value, selected_metric_ids: set[int], label: str) -> int:
@@ -828,11 +839,22 @@ def export_decision_markdown(decision_id: int, db: Session = Depends(get_db)):
 
 @router.get("/metrics")
 def list_metrics(db: Session = Depends(get_db)):
-    """List all metrics, grouped by dimension (category)."""
+    """List all metrics, grouped by dimension (category).
+
+    Stale duplicate metrics (rows whose name is a built-in metric
+    with a '(custom)' suffix from seed reconciliation) are filtered
+    out so only one canonical row per built-in metric appears.
+    """
     all_metrics = db.query(Metric).order_by(Metric.category, Metric.name).all()
 
     grouped: dict[str, list] = {}
     for m in all_metrics:
+        # Filter out stale (custom) duplicates of built-in metrics
+        if ontology_metric_metadata(m.name) is None:
+            base = _strip_custom_suffix(m.name)
+            if ontology_metric_metadata(base) is not None:
+                continue
+
         category = m.category or "General"
         if category not in grouped:
             grouped[category] = []

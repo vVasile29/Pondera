@@ -319,7 +319,13 @@ def extract_alternatives(query: str) -> List[str]:
     def clean(alt: str) -> str:
         alt = alt.strip().strip("?.,;:!")
         alt = re.sub(
-            r"^(?:should\s+i|am\s+i|what\s+about|how\s+about|what\s+is|what\s+are|tell\s+me)\s+",
+            r"^(?:should\s+(?:i|we)|"
+            r"am\s+i|"
+            r"what\s+about|how\s+about|what\s+is|what\s+are|"
+            r"tell\s+me|"
+            r"should\s+(?:an\s+ai\s+agent|the\s+ai\s+agent|the\s+user|someone)|"
+            r"do\s+(?:i|we)|"
+            r"would\s+you|should\s+you)\s+",
             "",
             alt,
             flags=re.IGNORECASE,
@@ -333,8 +339,10 @@ def extract_alternatives(query: str) -> List[str]:
     before_clean = before
     for prefix in [
         "should i",
+        "should we",
         "am i",
         "do i",
+        "do we",
         "would you",
         "should you",
         "i want to",
@@ -345,9 +353,18 @@ def extract_alternatives(query: str) -> List[str]:
         before_clean = re.sub(
             r"^" + prefix, "", before_clean, flags=re.IGNORECASE
         ).strip()
+    for agent_prefix in [
+        "should an ai agent",
+        "should the ai agent",
+        "should the user",
+        "should someone",
+    ]:
+        before_clean = re.sub(
+            r"^" + agent_prefix, "", before_clean, flags=re.IGNORECASE
+        ).strip()
 
     before_clean = re.sub(
-        r"^(?:buy|get|choose|pick|select|take|go\s+for|opt\s+for|decide\s+between|compare|be|become|do|play|learn|use|try|have)\s+",
+        r"^(?:buy|get|choose|pick|select|take|go\s+(?:for|to)|opt\s+for|decide\s+between|compare|be|become|do|play|learn|use|try|have)\s+",
         "",
         before_clean,
         flags=re.IGNORECASE,
@@ -369,5 +386,26 @@ def extract_alternatives(query: str) -> List[str]:
         alternatives = [
             clean(a) for a in alts_combined if clean(a) and len(clean(a)) > 1
         ]
+
+    # Post-processing: detect shared-object pattern.
+    # E.g., ["Build", "Buy this software"] → ["Build this software", "Buy this software"]
+    if len(alternatives) == 2:
+        _decision_verbs = {
+            "buy", "build", "choose", "pick", "select", "use", "send",
+            "get", "have", "play", "do", "learn", "take", "try", "make",
+        }
+        alt0_lower = alternatives[0].lower()
+        alt1_lower = alternatives[1].lower()
+        alt0_words = alt0_lower.split()
+        alt1_words = alt1_lower.split()
+        if (
+            len(alt0_words) == 1
+            and len(alt1_words) >= 2
+            and alt0_words[0] in _decision_verbs
+            and alt1_words[0] in _decision_verbs
+            and alt0_words[0] != alt1_words[0]
+        ):
+            shared_obj = " ".join(alt1_words[1:])
+            alternatives[0] = f"{alternatives[0]} {shared_obj}"
 
     return alternatives

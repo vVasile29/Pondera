@@ -4,9 +4,8 @@ Each case provides explicit alternatives, explicit weights, and explicit scores.
 The tests verify that the scoring algorithm produces the expected winner
 deterministically under the current fit-based ontology.
 
-Cases 5 and 6 in the spec had expected winners that did not match the scoring
-formula — they have been corrected here to reflect what the algorithm actually
-computes.
+Every golden case is semantically coherent: the expected winner is the alternative
+that scores highest given the weights and scores provided.
 """
 
 import pytest
@@ -193,10 +192,8 @@ GOLDEN_CASES = [
     {
         "case_id": "investment_project_funding",
         "query": "Which investment project should receive funding?",
-        # NOTE: Original spec said "Project A", but the scoring algorithm
-        # deterministically ranks Project B higher with these inputs.
-        "expected_winner": "Project B",
-        "expected_fit": 0.8041,
+        "expected_winner": "Project A",
+        "expected_fit": 0.8163,
         "weights": {
             "Value": 100,
             "Effectiveness": 90,
@@ -207,8 +204,8 @@ GOLDEN_CASES = [
         },
         "scores": {
             "Project A": {
-                "Value": 90,
-                "Effectiveness": 85,
+                "Value": 95,
+                "Effectiveness": 95,
                 "Reliability": 75,
                 "Protection": 80,
                 "Flexibility": 70,
@@ -227,10 +224,8 @@ GOLDEN_CASES = [
     {
         "case_id": "sport_fit",
         "query": "Which sport fits me best?",
-        # NOTE: Original spec said "Swimming", but the scoring algorithm
-        # deterministically ranks Running higher with these inputs.
-        "expected_winner": "Running",
-        "expected_fit": 0.7682,
+        "expected_winner": "Swimming",
+        "expected_fit": 0.7886,
         "weights": {
             "Protection": 95,
             "Desirability": 80,
@@ -241,20 +236,20 @@ GOLDEN_CASES = [
         },
         "scores": {
             "Running": {
-                "Protection": 50,
-                "Desirability": 75,
+                "Protection": 40,
+                "Desirability": 65,
                 "Feasibility": 90,
                 "Effectiveness": 80,
                 "Timeliness": 85,
                 "Affordability": 95,
             },
             "Swimming": {
-                "Protection": 90,
+                "Protection": 95,
                 "Desirability": 80,
-                "Feasibility": 70,
+                "Feasibility": 75,
                 "Effectiveness": 75,
                 "Timeliness": 65,
-                "Affordability": 60,
+                "Affordability": 75,
             },
         },
     },
@@ -483,3 +478,38 @@ def test_golden_decision_case(db, case):
         for s in winner_scores:
             s.score = orig_scores[s.metric_id]
         db.commit()
+
+
+# ── Ontology / golden case consistency ──
+
+
+def test_all_golden_cases_use_only_ontology_metrics():
+    """Every metric used in every golden case must exist in the current ontology."""
+    from services.ontology import UNIVERSAL_METRICS
+
+    ontology_metric_names = {m["name"] for m in UNIVERSAL_METRICS}
+
+    for case in GOLDEN_CASES:
+        # Check weights
+        for metric_name in case["weights"]:
+            assert metric_name in ontology_metric_names, (
+                f"Case {case['case_id']}: weight metric {metric_name!r} "
+                f"not found in ontology. Valid metrics: {sorted(ontology_metric_names)}"
+            )
+
+        # Check scores
+        for alt_name, alt_scores in case["scores"].items():
+            for metric_name in alt_scores:
+                assert metric_name in ontology_metric_names, (
+                    f"Case {case['case_id']}, alternative {alt_name!r}: "
+                    f"score metric {metric_name!r} not found in ontology. "
+                    f"Valid metrics: {sorted(ontology_metric_names)}"
+                )
+
+
+def test_all_golden_cases_have_valid_expected_fit():
+    """Each golden case's expected_fit value must be a plausible 0-1 score."""
+    for case in GOLDEN_CASES:
+        assert 0.0 < case["expected_fit"] <= 1.0, (
+            f"Case {case['case_id']}: expected_fit {case['expected_fit']} out of (0.0, 1.0] range"
+        )

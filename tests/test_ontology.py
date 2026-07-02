@@ -231,43 +231,54 @@ def test_ontology_every_metric_belongs_to_a_category():
 
 
 def test_extract_doctor_or_stay_home():
-    result = extract_alternatives("Should I go to the doctor or stay home?")
-    # Parser strips "should i" but "go to" is not in the verb-strip list,
-    # so the first alternative retains "Go to"
-    assert result[0] == "Go to the doctor"
-    assert result[1] == "Stay home"
-    assert len(result) == 2
+    """Should I go to the doctor or stay home? → ['Doctor', 'Stay home']"""
+    assert extract_alternatives("Should I go to the doctor or stay home?") == [
+        "Doctor",
+        "Stay home",
+    ]
 
 
 def test_extract_buy_house_or_rent():
-    result = extract_alternatives("Should I buy a house or rent?")
-    assert "House" in result
-    assert "Rent" in result
-    assert len(result) == 2
+    """Should I buy a house or rent? → ['House', 'Rent']"""
+    assert extract_alternatives("Should I buy a house or rent?") == [
+        "House",
+        "Rent",
+    ]
 
 
 def test_extract_supplier_a_or_b():
-    result = extract_alternatives("Should we choose Supplier A or Supplier B?")
-    # Parser doesn't strip "should we" (only "should i"), and "choose" at
-    # a non-start position is not stripped either.
-    assert result[0] == "Should we choose Supplier A"
-    assert result[1] == "Supplier B"
-    assert len(result) == 2
+    """Should we choose Supplier A or Supplier B? → ['Supplier A', 'Supplier B']"""
+    assert extract_alternatives("Should we choose Supplier A or Supplier B?") == [
+        "Supplier A",
+        "Supplier B",
+    ]
 
 
 def test_extract_build_or_buy_software():
-    result = extract_alternatives("Should we build or buy this software?")
-    # Parser doesn't strip "should we" (only "should i" is in the prefix list)
-    assert result[0] == "Should we build"
-    assert result[1] == "Buy this software"
-    assert len(result) == 2
+    """Should we build or buy this software? → ['Build this software', 'Buy this software']"""
+    assert extract_alternatives("Should we build or buy this software?") == [
+        "Build this software",
+        "Buy this software",
+    ]
 
 
 def test_extract_switch_jobs_or_stay():
-    result = extract_alternatives("Should I switch jobs or stay?")
-    assert "Switch jobs" in result
-    assert "Stay" in result
-    assert len(result) == 2
+    """Should I switch jobs or stay? → ['Switch jobs', 'Stay']"""
+    assert extract_alternatives("Should I switch jobs or stay?") == [
+        "Switch jobs",
+        "Stay",
+    ]
+
+
+def test_extract_agent_send_email_or_ask():
+    """Should an AI agent send this email or ask for approval?
+    → ['Send this email', 'Ask for approval']"""
+    assert extract_alternatives(
+        "Should an AI agent send this email or ask for approval?"
+    ) == [
+        "Send this email",
+        "Ask for approval",
+    ]
 
 
 # ── Basic "or" extraction ──

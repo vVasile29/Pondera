@@ -460,6 +460,8 @@ def test_seeded_metrics_on_list_page(client, db):
     assert {metric["name"] for metric in all_metrics}.isdisjoint(
         {"Cost", "Performance", "Time Required", "Risk", "Safety", "Enjoyment", "Satisfaction", "Convenience", "Accessibility"}
     )
+    # No stale duplicate names in clean startup
+    assert not any("(custom)" in m["name"] for m in all_metrics)
 
 
 def test_metrics_api_exposes_exact_fit_metadata_without_direction_fields(client, db):
@@ -476,6 +478,71 @@ def test_metrics_api_exposes_exact_fit_metadata_without_direction_fields(client,
     by_name = {metric["name"]: metric for metric in all_metrics}
     _assert_exact_metric_metadata(by_name["Affordability"], "Affordability")
     _assert_exact_metric_metadata(by_name["Reliability"], "Reliability")
+
+
+def test_list_metrics_filters_stale_custom_duplicates(client, db):
+    """After a Cost + pre-existing Affordability conflict, only one
+    'Affordability' appears — the (custom) duplicate is filtered out."""
+    from main import reconcile_seed_metrics
+
+    # Simulate the conflict scenario
+    db.query(Metric).delete()
+    db.commit()
+    old_cost = Metric(name="Cost", category="Financial", description="old cost")
+    conflict = Metric(name="Affordability", category="Custom", description="user-made")
+    db.add_all([old_cost, conflict])
+    db.commit()
+
+    reconcile_seed_metrics(db)
+
+    resp = client.get("/api/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+    all_metrics = data["grouped_metrics"]
+    names = [m["name"] for group in all_metrics.values() for m in group]
+
+    # Canonical Affordability appears exactly once
+    assert names.count("Affordability") == 1
+    # The stale duplicate is suppressed
+    assert "Affordability (custom)" not in names
+    # All 12 built-in names appear exactly once each
+    from services.ontology import UNIVERSAL_METRICS
+    builtin_names = {m["name"] for m in UNIVERSAL_METRICS}
+    for bname in builtin_names:
+        assert names.count(bname) == 1, f"{bname} count is {names.count(bname)}"
+
+
+def test_list_metrics_shows_genuine_custom_metrics(client, db):
+    """A genuinely custom metric (no name conflict with built-ins)
+    still appears in the listing."""
+    resp = client.post("/api/metrics", json={
+        "name": "My Custom Metric",
+        "category": "General",
+        "description": "A user-created metric",
+    })
+    assert resp.status_code == 201
+
+    resp2 = client.get("/api/metrics")
+    data = resp2.json()
+    names = [m["name"] for group in data["grouped_metrics"].values() for m in group]
+    assert "My Custom Metric" in names
+    assert names.count("My Custom Metric") == 1
+
+
+def test_list_metrics_shows_custom_with_suffix_not_matching_builtin(client, db):
+    """A metric named e.g. 'Special (custom)' whose base 'Special' is
+    not a built-in metric is still shown (not a stale duplicate)."""
+    resp = client.post("/api/metrics", json={
+        "name": "Special (custom)",
+        "category": "General",
+        "description": "Custom metric with (custom) in name",
+    })
+    assert resp.status_code == 201
+
+    resp2 = client.get("/api/metrics")
+    data = resp2.json()
+    names = [m["name"] for group in data["grouped_metrics"].values() for m in group]
+    assert "Special (custom)" in names
 
 
 def test_decision_detail_and_refine_expose_exact_fit_contract(client, db):
