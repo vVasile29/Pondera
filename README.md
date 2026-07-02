@@ -1,65 +1,53 @@
 # Optium
 
-Optium is a **deterministic multi-criteria decision analysis engine** for
-transparent, repeatable decisions. Ask a decision question, review the parsed
-alternatives, score each option against universal criteria, and inspect the
-resulting tradeoffs.
+Optium is a **deterministic multi-criteria decision analysis (MCDA) engine** for transparent, repeatable decisions. Type a decision question, review the parsed alternatives, choose and tune criteria, score each option on a 0–100 fit scale, and inspect the resulting tradeoffs.
 
-It does not give domain-specific advice, fetch real-time facts, or make
-black-box recommendations. The user supplies or reviews every score. Optium's
-value is structure, transparency, robustness, and tradeoff analysis.
+The core engine is intentionally deterministic: the final ranking is driven by user-visible criteria, weights, scores, knock-out rules, and threshold filters. Optional AI assistance can draft criteria, evidence, score suggestions, and summaries, but those suggestions are stored as reviewable artifacts and do **not** change final scores until a user applies them.
 
-## Why This Exists
+## What Optium Is
 
-Most decisions are made with intuition, ad-hoc spreadsheets, or inconsistent
-criteria. Optium makes criteria, weights, scores, tradeoffs, and robustness
-explicit and inspectable — so you can see *why* one option ranks above another
-and how stable that ranking is under uncertainty.
+- A structured decision-framing tool built around explicit criteria, weights, scores, and tradeoffs.
+- A universal fit-scoring framework that works for diagnosis, comparison, and ranking decisions.
+- A transparent MCDA workflow with robustness analysis, score tables, radar charts, threshold filters, and Markdown export.
+- A local-first web app with a FastAPI backend, SQLite by default, and a React/Vite frontend.
 
 ## What Optium Is Not
 
-- **Not an expert system** — it does not encode domain knowledge or provide
-  factual advice.
-- **Not financial, medical, or legal advice** — it is a structured
-  decision-framing tool.
-- **Not a real-time data platform** — it does not fetch live prices, reviews,
-  or third-party data.
-- **Not an LLM reasoning wrapper** — its parser extracts structure from
-  free-text prompts; the MCDA framework, not persuasive prose, drives the
-  output.
-- **Not a guarantee of correct outcomes** — results depend entirely on the
-  criteria, weights, and scores the user provides.
+- **Not an expert system** — it does not encode domain-specific expertise.
+- **Not financial, medical, legal, or safety advice** — it helps structure judgment; it does not replace qualified advice.
+- **Not a real-time data platform** — it does not fetch live prices, reviews, regulations, or third-party data.
+- **Not a black-box recommendation engine** — the decision model remains inspectable and editable.
+- **Not an autonomous AI scorer** — AI-generated evidence and score drafts are pending artifacts until reviewed or applied.
+- **Not a guarantee of correct outcomes** — results depend on the alternatives, criteria, weights, scores, and assumptions supplied by the user.
 
 ## How It Works
 
-```
+```text
 Question Input
-  → Parser (extracts alternatives / single subject / list structure)
-  → Internal Routing (diagnosis / comparison / ranking)
-  → Review (edit alternatives, select from pre-seeded criteria, adjust weights,
-    set knock-out thresholds)
-  → Score (rate each alternative on each criterion, 0–100)
-  → Results (fit scores, radar chart, score table, KO evaluation,
-    threshold filters, robustness analysis)
+  → Parser extracts alternatives / single subject / list structure
+  → Internal routing selects diagnosis, comparison, or ranking flow
+  → Criteria review: select built-in metrics, add custom metrics, optional AI suggestions
+  → Weight review: tune decision-level metric weights, optional AI weight suggestions
+  → Knock-out review: define true must-have score gates
+  → Scoring: enter 0–100 fit scores, add evidence, optionally review AI score drafts
+  → Results: ranking, radar chart, table, threshold filters, robustness, export, optional AI summary
 ```
 
-### 1. Unified Prompt Entry
+### Unified Prompt Entry
 
-The landing page asks a single question: *"What's your decision today?"* There
-is no mode picker. The parser auto-detects the decision shape:
+The landing page asks one question: **“What’s your decision today?”** There is no public mode picker. Optium infers the internal decision shape from the prompt.
 
 | Prompt shape | Internal flow | Example |
 |---|---|---|
-| One option or subject | Diagnosis | "How good is a Tesla for commuting?" |
-| Two options | Comparison | "House or apartment?" |
-| Three or more options | Ranking | "Rank Python, Java, Go" |
+| One option or subject | Diagnosis | `How good is a Tesla for commuting?` |
+| Two options | Comparison | `House or apartment?` |
+| Three or more options | Ranking | `Rank Python, Java, and Go` |
 
-### 2. Universal Criteria Framework
+### Universal Fit Criteria
 
-Every decision uses the same 6 pre-seeded fit dimensions with 12 curated
-metrics. Metrics are global and shared — no per-decision criteria creation.
+Optium seeds 12 reusable metrics across 6 dimensions. Every metric is interpreted as a direct **0–100 fit score**: higher always means better fit.
 
-| Dimension | Question | Metrics |
+| Dimension | Question | Built-in metrics |
 |---|---|---|
 | Resource Fit | Is the required burden acceptable and worth it? | Affordability, Value |
 | Objective Fit | Does this achieve the purpose of the decision? | Effectiveness, Quality |
@@ -68,55 +56,78 @@ metrics. Metrics are global and shared — no per-decision criteria creation.
 | People Fit | Does this option fit the people affected? | Desirability, Acceptance |
 | Practical Fit | Can this option realistically be done, used, accessed, operated, and adapted? | Feasibility, Flexibility |
 
-### 3. Decision-Level Weights
+Users can also:
 
-Weights represent the decision-maker's priorities and are shared across all
-alternatives. The scoring formula is a weighted additive MCDA model:
+- create, update, and delete **global metrics** from the `/metrics` page;
+- add **decision-scoped custom metrics** during review;
+- accept AI-suggested metrics as decision-scoped custom metrics.
 
+Reserved legacy metric names such as `Cost`, `Performance`, `Risk`, and `Safety` are reconciled to the current fit ontology on startup, preserving existing metric rows where possible.
+
+### Scoring Model
+
+Weights are decision-level priorities shared across all alternatives. Scores and weights both use a 0–100 scale.
+
+```text
+fit = Σ(score[metric] × weight[metric]) / Σ(weight[metric]) / 100.0
 ```
-fit = Σ(score[criterion] × weight[criterion]) / Σ(weight[criterion]) / 100.0
+
+A score of `0` means the option is a very poor fit for that metric; `100` means it is an excellent fit. Optium does not invert scores for “lower is better” criteria. Instead, the metric name and question should be phrased as a positive fit, such as `Affordability`, `Efficiency`, or `Protection`.
+
+## Current Features
+
+- **Unified natural-language decision entry** with diagnosis/comparison/ranking detection.
+- **Four-step review workflow** for criteria, weights, knock-outs, and scoring.
+- **Universal fit ontology** with 6 dimensions, 12 built-in metrics, questions, anchors, and default weights.
+- **Global metric management** via the `/metrics` page.
+- **Decision-scoped custom metrics** in the review workflow.
+- **Decision-level weights** shared across alternatives.
+- **Knock-out criteria** that act as pre-ranking eligibility gates.
+- **Post-hoc threshold filters** that split scored alternatives into pass/fail groups on the results page.
+- **Evidence items** linked to decisions, alternatives, and/or metrics, with pending/approved/rejected review states.
+- **Score drafts** with suggested score, optional human-adjusted score, rationale, evidence links, and apply/reject workflow.
+- **Optional OpenAI assistance** for metric suggestions, weight recommendations, knock-out suggestions, evidence drafts, score drafts, and result summaries.
+- **Robustness analysis** using Monte Carlo sensitivity analysis on weights and scores.
+- **Radar chart** and detailed score table for visual comparison.
+- **Markdown export** for decision briefs.
+- **Saved decisions** with delete support.
+- **Dark/light theme** with system preference support.
+- **Docker Compose deployment** with nginx serving the SPA and proxying `/api/*` to FastAPI.
+- **Development checks** for pytest, frontend tests, TypeScript typecheck, Vite build, and Ruff.
+
+## Optional AI Assistance
+
+AI is disabled by default. When enabled, AI runs only on the backend and uses the configured OpenAI model. It can suggest or draft, but it cannot silently overwrite final scores.
+
+AI-supported actions:
+
+| Area | What AI can produce | User control |
+|---|---|---|
+| Criteria | Suggested custom metrics and existing-metric inclusion guidance | User accepts/rejects suggestions |
+| Weights | Recommended metric weights with rationale | User applies recommendations |
+| Knock-outs | Suggested must-have thresholds | User applies only true gates |
+| Evidence | Pending evidence items | User approves/rejects evidence |
+| Scores | Pending score drafts linked to evidence | User edits/applies/rejects drafts |
+| Results | Narrative summary | Display-only summary |
+
+Relevant environment variables:
+
+```env
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
+AI_ENABLED=false
+AI_MAX_METRIC_SUGGESTIONS=8
+AI_MAX_SCORE_DRAFTS_PER_REQUEST=100
+AI_MAX_EVIDENCE_ITEMS_PER_REQUEST=100
 ```
 
-Every slider is a 0–100 fit score. Higher always means better fit. Scores and
-weights both use a 0–100 granular scale.
+Local helper script:
 
-### 4. Results, Thresholds, and Robustness
+```bash
+python scripts/setup_openai_env.py
+```
 
-- **Knock-out (KO) criteria** — set minimum score thresholds per criterion
-  on the review page. Alternatives failing any KO criterion are eliminated
-  before ranking. KO criteria act as a pre-scoring eligibility gate.
-- **Radar chart** — visualize how alternatives compare across all criteria.
-- **Post-hoc threshold filters** — apply must-have cutoffs (e.g.
-  `Affordability >= 60`, `Protection >= 80`) after scoring to separate passing
-  and failing alternatives. Thresholds operate on the displayed user-entered fit scores — the score
-  you see on the slider is the score compared against the threshold.
-- **Robustness analysis** — Monte Carlo sensitivity analysis that perturbs
-  weights and scores within a plausible range, then reports how often the
-  ranking holds. See [`docs/ROBUSTNESS.md`](docs/ROBUSTNESS.md) for the full
-  algorithm.
-
-## Features
-
-- **Unified natural language input** — one prompt, no mode picker
-- **Automatic flow detection** — diagnosis, comparison, or ranking inferred
-  from the prompt structure
-- **Universal criteria framework** — 6 value dimensions, 12 curated metrics,
-  pre-seeded globally
-- **Interactive review** — inspect and edit parsed alternatives, select
-  from pre-seeded criteria, adjust decision-level weights, set knock-out
-  thresholds per criterion
-- **Weighted scoring** — 0–100 sliders, weighted additive MCDA model
-- **Knock-out (KO) criteria** — define minimum score thresholds per criterion;
-  alternatives that fail any KO criterion are eliminated before ranking
-- **Decision robustness** — Monte Carlo sensitivity analysis with winner
-  retention and rank acceptability
-- **Post-hoc threshold filtering** — must-have cutoffs applied after scoring
-- **Radar chart** — Chart.js visualization for multi-criteria comparison
-- **Metrics management** — built-in page to create, edit, and delete criteria
-  across the 6 universal dimensions
-- **Zero signup** — no accounts required; decisions stored in the configured
-  backend database (SQLite by default)
-- **Dark/light mode** — toggleable theme with system preference detection
+The script reads `~/.openapi/secret_key`, updates `.env` with `OPENAI_API_KEY`, `OPENAI_MODEL`, and `AI_ENABLED`, preserves unrelated `.env` values/comments, ensures `.env` is ignored by git, and does not print the key.
 
 ## Quick Start
 
@@ -127,20 +138,9 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Optional AI draft assistance uses OpenAI on the backend only. Put your key in
-`~/.openapi/secret_key`, then run:
+Open http://localhost:8080.
 
-```bash
-python scripts/setup_openai_env.py
-docker compose up --build
-```
-
-The script writes `OPENAI_API_KEY`, `OPENAI_MODEL`, and `AI_ENABLED` to the
-root `.env` without printing the key. AI creates pending evidence and score
-drafts only; final scores change only when you apply a draft.
-
-Open http://localhost:8080. The nginx container serves the SPA and proxies
-`/api/*` requests to the backend.
+The `web` container serves the React SPA through nginx and proxies `/api/*` to the backend. The API stores data in a named Docker volume at `/data/optium.db` by default.
 
 Smoke checks:
 
@@ -150,15 +150,17 @@ curl http://localhost:8080/health
 curl http://localhost:8080/api/metrics
 ```
 
-Data persists in a named Docker volume (`optium-data`). Use
-`docker compose down -v` to delete all saved decisions.
+Delete all persisted Docker data:
+
+```bash
+docker compose down -v
+```
 
 ### Local Development
 
-You need **two terminals** — one for the backend API and one for the frontend
-dev server.
+Use two terminals: one for the backend API and one for the frontend dev server.
 
-**Backend:**
+Backend:
 
 ```bash
 python3 -m venv .venv
@@ -168,7 +170,7 @@ pip install -r requirements-dev.txt
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-**Frontend:**
+Frontend:
 
 ```bash
 cd frontend
@@ -176,105 +178,192 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. The Vite dev server proxies `/api/*` requests to
-the backend on port 8000.
+Open http://localhost:5173. The Vite dev server proxies `/api/*` requests to the backend on port `8000`.
 
-**Production build:**
+Production frontend build:
 
 ```bash
 cd frontend
 npm run build
-# Serve frontend/dist/ with nginx or another static file server
-# (FastAPI does not serve static files by default)
 ```
 
-## Run Tests
+FastAPI does not serve the frontend static files in local development. Use nginx, the provided frontend Docker image, or another static file server for `frontend/dist/`.
 
-**Backend:**
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `WEB_PORT` | `8080` | Host port for the Docker nginx frontend |
+| `DATABASE_URL` | `sqlite:///./optium.db` | SQLAlchemy database URL |
+| `CORS_ORIGINS` | `http://localhost:5173` locally; empty in Compose | Comma-separated allowed frontend origins |
+| `OPENAI_API_KEY` | empty | Enables OpenAI calls when `AI_ENABLED=true` |
+| `OPENAI_MODEL` | `gpt-4o-mini` in `.env.example`; `gpt-4.1-mini` in Compose fallback/setup script | OpenAI model used by backend AI helpers |
+| `AI_ENABLED` | `false` | Master switch for AI assistance |
+| `AI_MAX_METRIC_SUGGESTIONS` | `8` | Max AI metric suggestions per request |
+| `AI_MAX_SCORE_DRAFTS_PER_REQUEST` | `100` | Max AI score drafts per request |
+| `AI_MAX_EVIDENCE_ITEMS_PER_REQUEST` | `100` | Max AI evidence items per request |
+
+## Run Tests and Checks
+
+Backend tests:
 
 ```bash
 source .venv/bin/activate
-pytest tests/ -v
+pytest tests/ -q
 ```
 
-**Frontend:**
+Backend lint:
+
+```bash
+source .venv/bin/activate
+ruff check .
+```
+
+Frontend tests and checks:
 
 ```bash
 cd frontend
-npx tsc --noEmit
-npx vite build
+npm test
+npm run typecheck
+npm run build
 ```
 
-## Tech Stack
+## API Overview
 
-| Layer | Technology |
-|---|---|
-| Backend | Python FastAPI (REST JSON API) |
-| Database | SQLAlchemy + SQLite (default); other SQL databases may be usable via `DATABASE_URL` |
-| Frontend | React 18 + TypeScript + Vite + Shadcn UI + Chart.js |
-| Testing | pytest + httpx (backend) / TypeScript + Vite (frontend) |
+The backend exposes a REST JSON API under `/api/*`.
+
+### Core Decisions
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/decide` | Parse a free-text question and create a decision |
+| `GET` | `/api/decisions` | List saved decisions |
+| `GET` | `/api/decisions/{id}` | Get decision detail, scores, filters, KO results, and robustness |
+| `POST` | `/api/decisions/{id}/refine` | Save alternatives, selected metrics, weights, and optional KO criteria |
+| `POST` | `/api/decisions/{id}/ko-criteria` | Update knock-out criteria |
+| `POST` | `/api/decisions/{id}/score` | Save scores and compute results |
+| `POST` | `/api/decisions/{id}/thresholds` | Apply result-page threshold filters |
+| `POST` | `/api/decisions/{id}/thresholds/clear` | Clear threshold filters |
+| `GET` | `/api/decisions/{id}/export-markdown` | Export a Markdown decision brief |
+| `POST` | `/api/decisions/{id}/delete` | Delete a decision and its owned records |
+
+### Metrics
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/metrics` | List global metrics grouped by dimension |
+| `POST` | `/api/metrics` | Create a global metric |
+| `PUT` | `/api/metrics/{id}` | Update a global metric |
+| `DELETE` | `/api/metrics/{id}` | Delete a global metric and related weights/scores |
+| `POST` | `/api/decisions/{id}/custom-metrics` | Create a decision-scoped custom metric |
+| `PUT` | `/api/decisions/{id}/custom-metrics/{metric_id}` | Update a decision-scoped custom metric |
+| `DELETE` | `/api/decisions/{id}/custom-metrics/{metric_id}` | Delete a decision-scoped custom metric |
+
+### Evidence, Drafts, and AI
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/ai/status` | Report whether AI is enabled and configured |
+| `GET` | `/api/decisions/{id}/evidence` | List evidence items |
+| `POST` | `/api/decisions/{id}/evidence` | Create evidence manually |
+| `PATCH` | `/api/decisions/{id}/evidence/{evidence_id}` | Update evidence |
+| `POST` | `/api/decisions/{id}/evidence/{evidence_id}/approve` | Approve evidence |
+| `POST` | `/api/decisions/{id}/evidence/{evidence_id}/reject` | Reject evidence |
+| `DELETE` | `/api/decisions/{id}/evidence/{evidence_id}` | Delete evidence |
+| `GET` | `/api/decisions/{id}/score-drafts` | List score drafts |
+| `POST` | `/api/decisions/{id}/score-drafts` | Create a score draft manually |
+| `PATCH` | `/api/decisions/{id}/score-drafts/{draft_id}` | Edit a score draft |
+| `POST` | `/api/decisions/{id}/score-drafts/{draft_id}/approve` | Approve a score draft |
+| `POST` | `/api/decisions/{id}/score-drafts/{draft_id}/reject` | Reject a score draft |
+| `POST` | `/api/decisions/{id}/score-drafts/{draft_id}/apply` | Apply one score draft to final scores |
+| `POST` | `/api/decisions/{id}/score-drafts/apply` | Bulk-apply score drafts |
+| `POST` | `/api/decisions/{id}/ai/suggest-metrics` | Suggest metrics and selection guidance |
+| `POST` | `/api/decisions/{id}/ai/optimize-weights` | Suggest weight adjustments |
+| `POST` | `/api/decisions/{id}/ai/suggest-ko` | Suggest knock-out criteria |
+| `POST` | `/api/decisions/{id}/ai/draft-evidence` | Create pending AI evidence |
+| `POST` | `/api/decisions/{id}/ai/suggest-scores` | Create pending AI score drafts |
+| `POST` | `/api/decisions/{id}/ai/summary` | Generate a result summary |
 
 ## Architecture
 
-### Request Flow
-
-```
+```text
 Browser / API client
-  → POST /api/decide (free-text question)
-    → services/parser.py (extract alternatives, detect flow)
-    → Internal routing (diagnose / compare / rank)
-    → Review page (edit alternatives, select from pre-seeded criteria, adjust weights)
-    → Scoring page (0–100 sliders per alternative × criterion)
-    → Result page (fit scores, radar chart, score table)
-    → Optional threshold filters + robustness analysis
+  → React SPA routes
+    → /                      Landing prompt
+    → /decisions             Saved decision list
+    → /decisions/:id/review  Criteria → weights → knock-outs → scoring
+    → /decisions/:id/result  Results, thresholds, robustness, export
+    → /metrics               Global metric management
+  → FastAPI /api/*
+    → parser                 Extract decision structure
+    → ontology               Seed and serialize fit metrics
+    → scoring                Fit scores, KO gates, thresholds, dimensions, gaps
+    → robustness             Monte Carlo sensitivity analysis
+    → export                 Markdown decision brief
+    → ai_decision            Optional backend-only OpenAI JSON helper
+  → SQLAlchemy models
+    → SQLite by default, configurable with DATABASE_URL
 ```
-
-The backend serves a RESTful JSON API under `/api/*`. The frontend is a
-client-side React SPA that communicates exclusively with these API endpoints.
 
 ### Project Structure
 
-```
-├── main.py                       # FastAPI app, CORS, router mounts
-├── models.py                     # SQLAlchemy models
-├── database.py                   # Engine, session, get_db
+```text
+├── main.py                       # FastAPI app, CORS, startup table creation, metric seed reconciliation
+├── models.py                     # SQLAlchemy models for decisions, metrics, scores, evidence, drafts
+├── database.py                   # Engine, session factory, get_db dependency
 ├── routers/
-│   └── api.py                    # JSON API endpoints (/api/*)
+│   └── api.py                    # REST endpoints under /api/*
 ├── services/
-│   ├── scoring.py                # Weighted MCDA score computation
-│   ├── robustness.py             # Monte Carlo sensitivity analysis
-│   ├── ontology.py               # Pre-seeded universal criteria dimensions
-│   ├── parser.py                 # Free-text question parser
+│   ├── ai_decision.py            # Optional OpenAI integration and AI status/caps helpers
+│   ├── decision_limits.py        # Guards for max alternatives/metrics and robustness workload
 │   ├── export.py                 # Markdown decision brief export
-│   └── decision_limits.py        # Workload guards for robustness
-├── frontend/                     # React SPA
+│   ├── ontology.py               # Universal fit dimensions, metrics, metadata, parser helpers
+│   ├── parser.py                 # Free-text prompt parser
+│   ├── robustness.py             # Monte Carlo sensitivity analysis
+│   └── scoring.py                # Weighted MCDA scoring, KO gates, thresholds, gap analysis
+├── scripts/
+│   └── setup_openai_env.py       # Local OpenAI .env setup helper
+├── docs/
+│   └── ROBUSTNESS.md             # Robustness algorithm details
+├── frontend/
 │   ├── src/
-│   │   ├── components/           # Page and shared components (incl. MetricsManager)
-│   │   ├── hooks/                # Custom React hooks
-│   │   ├── lib/                  # API client, scoring utilities
-│   │   └── types/                # TypeScript interfaces
+│   │   ├── components/           # React pages and shared UI components
+│   │   ├── hooks/                # Decision/scoring hooks
+│   │   ├── lib/                  # API client, scoring utilities, ontology constants
+│   │   └── types/                # TypeScript API/domain interfaces
+│   ├── tests/                    # Frontend scoring/static tests
 │   ├── package.json
-│   ├── vite.config.ts
-│   └── tailwind.config.ts
-└── tests/
-    ├── test_ontology.py
-    ├── test_parser.py
-    ├── test_robustness.py
-    ├── test_scoring.py
-    └── test_routes.py
+│   └── vite.config.ts
+└── tests/                        # Backend pytest suite
 ```
 
-### Notes
+## Data Model Notes
 
-- **Thresholds** are a post-hoc result-page feature, not a separate entry mode.
-- **Decision-level weights** (`DecisionWeight` model) are shared across all
-  alternatives for a given decision.
-- **Development schema resets** may be required after breaking model changes.
-  This project uses SQLAlchemy `create_all` rather than migrations, so delete or
-  recreate local SQLite databases when columns or constraints change.
-- The database defaults to SQLite. Other `sqlalchemy`-compatible databases may
-  work via the `DATABASE_URL` environment variable, but only SQLite is tested
-  in development and Docker.
+- `Decision` owns alternatives (`Activity`), decision weights, thresholds, and knock-out criteria.
+- `Metric` can be global (`decision_id = null`) or decision-scoped (`decision_id = decision.id`).
+- `DecisionWeight` stores one shared weight per selected metric for a decision.
+- `AlternativeScore` stores final user-applied scores by alternative and metric.
+- `EvidenceItem` stores claims and review state for human, LLM, API, document, or system evidence.
+- `ScoreDraft` stores suggested scores separately from final scores until applied.
+- `ScoreDraftEvidence` links score drafts to supporting evidence.
+
+This project uses SQLAlchemy `create_all` rather than migrations. Breaking model changes require resetting local development databases. For SQLite, delete the local `optium.db` or run `docker compose down -v` for Docker volume-backed data.
+
+Decision size is intentionally bounded: at most 20 alternatives and 20 selected metrics. Robustness analysis is skipped when the workload exceeds the configured guard.
+
+## Robustness Analysis
+
+Optium uses Monte Carlo sensitivity analysis on a weighted additive value model. Each simulation perturbs weights by ±10%, score values by ±5 points, clips values to `[0, 100]`, renormalizes sampled weights where possible, and tracks whether the base winner remains first.
+
+The results include winner-retention percentage, winner-changed percentage, rank acceptability, and a top-two score-gap interval. See [`docs/ROBUSTNESS.md`](docs/ROBUSTNESS.md) for the full algorithm.
+
+## Development Notes
+
+- `.env` is ignored and should not be committed.
+- CORS allows explicit origins only; Docker production is same-origin through nginx.
+- Optional AI requests are capped by environment variables and validated at API boundaries.
+- Existing persisted thresholds and KO criteria are sanitized defensively when read back from the database.
+- Public API responses intentionally omit legacy public `mode`, `category`, and `higher_is_better` fields; internal routing still uses the decision shape where needed.
 
 ## License
 
