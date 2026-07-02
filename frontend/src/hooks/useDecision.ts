@@ -7,24 +7,34 @@ export function useDecision(id: string | undefined) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetch = useCallback(async () => {
-    if (!id) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const numId = parseInt(id);
-      const result = await api.getDecision(numId);
-      setData(result);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [id]);
+  const fetch = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!id) return;
+      if (!options?.silent) setLoading(true);
+      setError(null);
+      try {
+        const numId = parseInt(id);
+        const result = await api.getDecision(numId);
+        setData(result);
+      } catch (e: any) {
+        setError(e.message);
+      } finally {
+        if (!options?.silent) setLoading(false);
+      }
+    },
+    [id],
+  );
+
+  const updateData = useCallback(
+    (updater: (current: DecisionDetail) => DecisionDetail) => {
+      setData((current) => (current ? updater(current) : current));
+    },
+    [],
+  );
 
   useEffect(() => {
     fetch();
   }, [fetch]);
 
-  return { data, loading, error, refetch: fetch };
+  return { data, loading, error, refetch: fetch, updateData };
 }

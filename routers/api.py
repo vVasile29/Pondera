@@ -44,6 +44,7 @@ from services.scoring import (
     sanitize_persisted_thresholds,
 )
 from services.ontology import (
+    OLD_TO_NEW_METRIC_NAMES,
     RESERVED_LEGACY_METRIC_NAMES,
     ontology_metric_metadata,
     serialize_metric_metadata,
@@ -105,10 +106,95 @@ def _validate_score_value(value, label: str) -> float:
 
 def _validate_metric_name_not_reserved(name: str) -> None:
     if name in RESERVED_LEGACY_METRIC_NAMES:
+        replacement = OLD_TO_NEW_METRIC_NAMES.get(name, {}).get("name")
+        hint = f' Use "{replacement}" or a more specific custom name instead.' if replacement else ""
         raise HTTPException(
             status_code=422,
-            detail="Metric name is reserved for legacy seed migration",
+            detail=(
+                f'"{name}" is a retired built-in metric name kept reserved for legacy seed migration.'
+                f"{hint}"
+            ),
         )
+
+
+def _validate_ko_criteria_payload(
+    ko_criteria_input,
+    selected_metric_ids: set[int],
+) -> list[dict]:
+    if ko_criteria_input is None:
+        return []
+    if not isinstance(ko_criteria_input, list):
+        raise HTTPException(status_code=422, detail="ko_criteria must be a list")
+
+    valid_ko_operators = {"<=", ">=", "<", ">"}
+    validated_ko = []
+    seen_metric_ids = set()
+    for kc in ko_criteria_input:
+        if not isinstance(kc, dict):
+            raise HTTPException(status_code=422, detail="Each KO criterion must be an object")
+
+        metric_id = kc.get("metric_id")
+        if not isinstance(metric_id, int) or isinstance(metric_id, bool):
+            raise HTTPException(status_code=422, detail="KO criterion metric_id must be an integer")
+        if metric_id not in selected_metric_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"KO criterion metric {metric_id} is not selected for this decision",
+            )
+        if metric_id in seen_metric_ids:
+            raise HTTPException(status_code=422, detail=f"Duplicate KO criterion for metric {metric_id}")
+
+        ko_operator = kc.get("ko_operator")
+        ko_value = kc.get("ko_value")
+
+        has_op = ko_operator is not None
+        has_val = ko_value is not None
+        if has_op != has_val:
+            raise HTTPException(
+                status_code=422,
+                detail="ko_operator and ko_value must both be present or both absent",
+            )
+        if not has_op and not has_val:
+            continue
+        if not isinstance(ko_operator, str):
+            raise HTTPException(status_code=422, detail="KO criterion ko_operator must be a string")
+        if ko_operator not in valid_ko_operators:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid KO operator '{ko_operator}'. Must be one of: {', '.join(sorted(valid_ko_operators))}",
+            )
+
+        try:
+            ko_value_float = float(ko_value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Invalid KO value '{ko_value}'")
+        if not math.isfinite(ko_value_float):
+            raise HTTPException(status_code=422, detail="KO value must be finite")
+        if ko_value_float < 0.0 or ko_value_float > 100.0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"KO value {ko_value_float} is outside the 0–100 scale",
+            )
+
+        validated_ko.append(
+            {
+                "metric_id": metric_id,
+                "ko_operator": ko_operator,
+                "ko_value": ko_value_float,
+            }
+        )
+        seen_metric_ids.add(metric_id)
+
+    return validated_ko
+
+
+def _selected_metric_ids(decision_id: int, db: Session) -> set[int]:
+    return {
+        dw.metric_id
+        for dw in db.query(DecisionWeight)
+        .filter(DecisionWeight.decision_id == decision_id)
+        .all()
+    }
 
 
 MAX_METRIC_NAME_LENGTH = 255
@@ -201,6 +287,12 @@ def _provider_float(value, label: str) -> float:
     if not math.isfinite(result):
         raise ValueError(f"{label} must be finite")
     return result
+
+
+def _provider_bool(value, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be boolean")
+    return value
 
 
 def _get_decision_or_404(decision_id: int, db: Session) -> Decision:
@@ -771,16 +863,62 @@ def refine_decision(
         raise HTTPException(status_code=422, detail="At least one metric is required")
     enforce_decision_size(len(alternatives), len(metrics_input))
 
+    valid_alternatives = []
+    seen_alternative_names = set()
+    for alt_name in alternatives:
+        if not isinstance(alt_name, str) or not alt_name.strip():
+            raise HTTPException(status_code=422, detail="Alternative names must be non-empty strings")
+        cleaned = alt_name.strip()
+        if cleaned in seen_alternative_names:
+            raise HTTPException(status_code=422, detail=f'Duplicate alternative "{cleaned}"')
+        valid_alternatives.append(cleaned)
+        seen_alternative_names.add(cleaned)
+
+    validated_metrics = []
+    selected_metric_ids = set()
+    visible_metric_ids = {
+        metric.id
+        for metric in db.query(Metric)
+        .filter(
+            (Metric.decision_id == decision_id) | (Metric.decision_id.is_(None))
+        )
+        .all()
+    }
+    for mitem in metrics_input:
+        if not isinstance(mitem, dict):
+            raise HTTPException(status_code=422, detail="Each metric must be an object")
+        metric_id = mitem.get("metric_id")
+        if not isinstance(metric_id, int) or isinstance(metric_id, bool):
+            raise HTTPException(status_code=422, detail="metric_id must be an integer")
+        if metric_id not in visible_metric_ids:
+            raise HTTPException(status_code=422, detail=f"Metric {metric_id} is not available for this decision")
+        if metric_id in selected_metric_ids:
+            raise HTTPException(status_code=422, detail=f"Duplicate metric {metric_id}")
+        weight = _validate_score_value(mitem.get("weight", 50), "weight")
+        validated_metrics.append({"metric_id": metric_id, "weight": weight})
+        selected_metric_ids.add(metric_id)
+
+    # Preserve existing scores for unchanged alternative names and metric IDs.
+    # The old implementation deleted activities, which cascaded scores, so simply
+    # visiting review before re-scoring could wipe already submitted results.
+    existing_scores_by_name_metric = {
+        (activity_name, metric_id): score
+        for activity_name, metric_id, score in (
+            db.query(Activity.name, AlternativeScore.metric_id, AlternativeScore.score)
+            .join(AlternativeScore, AlternativeScore.activity_id == Activity.id)
+            .filter(Activity.decision_id == decision_id)
+            .all()
+        )
+    }
+    existing_activities = list(decision.activities)
+
     db.query(DecisionWeight).filter(DecisionWeight.decision_id == decision_id).delete()
-    for activity in decision.activities:
-        db.query(AlternativeScore).filter(
-            AlternativeScore.activity_id == activity.id
-        ).delete()
+    for activity in existing_activities:
         db.delete(activity)
     db.flush()
 
     new_activities = []
-    for alt_name in alternatives:
+    for alt_name in valid_alternatives:
         activity = Activity(
             name=alt_name,
             category=decision.category if decision.category else "General",
@@ -790,109 +928,49 @@ def refine_decision(
         db.flush()
         new_activities.append(activity)
 
-    for mitem in metrics_input:
+    for mitem in validated_metrics:
         dw = DecisionWeight(
             decision_id=decision_id,
             metric_id=mitem["metric_id"],
-            weight=mitem.get("weight", 50),
+            weight=mitem["weight"],
         )
         db.add(dw)
     db.flush()
 
-    # ── KO criteria validation & storage ──
-    selected_metric_ids = {m["metric_id"] for m in metrics_input}
-    valid_ko_operators = {"<=", ">=", "<", ">"}
+    for activity in new_activities:
+        for metric_id in selected_metric_ids:
+            preserved_score = existing_scores_by_name_metric.get((activity.name, metric_id))
+            if preserved_score is None:
+                continue
+            db.add(
+                AlternativeScore(
+                    activity_id=activity.id,
+                    metric_id=metric_id,
+                    score=preserved_score,
+                )
+            )
+    db.flush()
 
     if ko_criteria_input is not None:
-        if not isinstance(ko_criteria_input, list):
-            raise HTTPException(
-                status_code=422,
-                detail="ko_criteria must be a list",
-            )
-
-        validated_ko = []
-        for kc in ko_criteria_input:
-            if not isinstance(kc, dict):
-                raise HTTPException(
-                    status_code=422, detail="Each KO criterion must be an object"
-                )
-
-            metric_id = kc.get("metric_id")
-            if not isinstance(metric_id, int) or isinstance(metric_id, bool):
-                raise HTTPException(
-                    status_code=422, detail="KO criterion metric_id must be an integer"
-                )
-            if metric_id not in selected_metric_ids:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"KO criterion metric {metric_id} is not selected for this decision",
-                )
-
-            ko_operator = kc.get("ko_operator")
-            ko_value = kc.get("ko_value")
-
-            has_op = ko_operator is not None
-            has_val = ko_value is not None
-
-            if has_op != has_val:
-                raise HTTPException(
-                    status_code=422,
-                    detail="ko_operator and ko_value must both be present or both absent",
-                )
-
-            if not has_op and not has_val:
-                continue
-
-            if not isinstance(ko_operator, str):
-                raise HTTPException(
-                    status_code=422,
-                    detail="KO criterion ko_operator must be a string",
-                )
-            if ko_operator not in valid_ko_operators:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Invalid KO operator '{ko_operator}'. Must be one of: {', '.join(sorted(valid_ko_operators))}",
-                )
-
-            try:
-                ko_value_float = float(ko_value)
-            except (TypeError, ValueError):
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Invalid KO value '{ko_value}'",
-                )
-            if not math.isfinite(ko_value_float):
-                raise HTTPException(
-                    status_code=422, detail="KO value must be finite"
-                )
-            if ko_value_float < 0.0 or ko_value_float > 100.0:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"KO value {ko_value_float} is outside the 0–100 scale",
-                )
-
-            validated_ko.append(
-                {
-                    "metric_id": metric_id,
-                    "ko_operator": ko_operator,
-                    "ko_value": ko_value_float,
-                }
-            )
-
+        validated_ko = _validate_ko_criteria_payload(ko_criteria_input, selected_metric_ids)
         decision.ko_criteria = json.dumps(validated_ko) if validated_ko else None
-    # else: ko_criteria_input is None, leave existing KO criteria unchanged
+    else:
+        # Drop KO criteria that reference metrics no longer selected.
+        existing_ko = _parse_ko_criteria(decision, db)
+        kept_ko = [kc for kc in existing_ko if kc.get("metric_id") in selected_metric_ids]
+        decision.ko_criteria = json.dumps(kept_ko) if kept_ko else None
 
     db.commit()
 
     metrics_db = (
         db.query(Metric)
-        .filter(Metric.id.in_([m["metric_id"] for m in metrics_input]))
+        .filter(Metric.id.in_([m["metric_id"] for m in validated_metrics]))
         .all()
     )
     metric_map = {m.id: m for m in metrics_db}
 
     criteria_result = []
-    for mitem in metrics_input:
+    for mitem in validated_metrics:
         m = metric_map.get(mitem["metric_id"])
         if m:
             criteria_result.append(
@@ -915,6 +993,20 @@ def refine_decision(
         "criteria": criteria_result,
         "ko_criteria": stored_ko,
     }
+
+
+@router.post("/decisions/{decision_id}/ko-criteria")
+def update_ko_criteria(decision_id: int, body: dict, db: Session = Depends(get_db)):
+    """Update knock-out criteria without touching alternatives, weights, or scores."""
+    decision = _get_decision_or_404(decision_id, db)
+    selected_metric_ids = _selected_metric_ids(decision_id, db)
+    if not selected_metric_ids:
+        raise HTTPException(status_code=422, detail="No selected metrics found for this decision")
+    ko_criteria_input = body.get("ko_criteria", [])
+    validated_ko = _validate_ko_criteria_payload(ko_criteria_input, selected_metric_ids)
+    decision.ko_criteria = json.dumps(validated_ko) if validated_ko else None
+    db.commit()
+    return {"ko_criteria": validated_ko}
 
 
 @router.post("/decisions/{decision_id}/score")
@@ -1465,16 +1557,45 @@ def _ai_call_or_error(prompt: str) -> dict:
 
 @router.post("/decisions/{decision_id}/ai/suggest-metrics")
 def ai_suggest_metrics(decision_id: int, body: dict, db: Session = Depends(get_db)):
-    """Ask AI to suggest new custom metrics relevant to this decision."""
+    """Ask AI to suggest custom metrics and existing metric selection changes."""
     decision = _get_decision_or_404(decision_id, db)
     caps = get_ai_caps()
-    max_suggestions = _validate_ai_max_field(body, "max_suggestions", caps["max_metric_suggestions"])
+    max_suggestions = _validate_ai_max_field(
+        body, "max_suggestions", caps["max_metric_suggestions"]
+    )
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    metrics = db.query(Metric).filter(Metric.id.in_(_decision_metric_ids(decision_id, db))).all()
-    output = _ai_call_or_error(build_decision_context(
-        decision, activities, metrics, body.get("user_context") or "",
-        instruction='The "metrics" array above shows all existing criteria for this decision. Only suggest NEW criteria that do NOT already exist. If any existing metric fits the decision needs, do NOT suggest a duplicate — the user can already use it. Return a JSON object with a top-level key "metric_suggestions" containing an array of suggested criteria. Each item must have: name, category (one of: Resource Fit, Objective Fit, Time Fit, Assurance Fit, People Fit, Practical Fit), description, why_it_matters, recommended_weight (0-100). Also include a top-level key "questions_for_user" (array of strings) if you need more context. Use "metric_suggestions" as the key name.',
-    ))
+    metrics = (
+        db.query(Metric)
+        .filter(Metric.id.in_(_decision_metric_ids(decision_id, db)))
+        .all()
+    )
+    metric_by_name = {m.name: m for m in metrics}
+    output = _ai_call_or_error(
+        build_decision_context(
+            decision,
+            activities,
+            metrics,
+            body.get("user_context") or "",
+            instruction=(
+                'The "metrics" array above shows all existing criteria currently available for this decision. '
+                "You may suggest NEW custom criteria only when the existing metrics do not fully cover "
+                "important decision-specific concerns. Do NOT suggest duplicates of existing metrics. "
+                "Also review the existing metrics together with any new custom metrics you suggest. "
+                "For every existing metric, recommend whether it should remain selected for this decision. "
+                "Recommend false for metrics that are unnecessary, unfitting, or made redundant by the "
+                "combination of existing metrics and your suggested custom metrics. "
+                'Return JSON only with top-level keys "metric_suggestions", '
+                '"metric_selection_recommendations", and "questions_for_user". '
+                'Each "metric_suggestions" item must have: name, category (one of: Resource Fit, '
+                "Objective Fit, Time Fit, Assurance Fit, People Fit, Practical Fit), description, "
+                "why_it_matters, recommended_weight (0-100). "
+                'Each "metric_selection_recommendations" item must have: metric_name exactly matching '
+                "one existing metric name, recommended_included (boolean), and rationale. "
+                "Weights are independent 0-100 importance ratings, not percentages, and do not need to sum to 100. "
+                'Use "metric_suggestions" as the key name.'
+            ),
+        )
+    )
     suggestions = output.get("metric_suggestions", [])
     if not isinstance(suggestions, list):
         raise HTTPException(status_code=502, detail="AI provider returned malformed output")
@@ -1485,9 +1606,18 @@ def ai_suggest_metrics(decision_id: int, body: dict, db: Session = Depends(get_d
                 raise ValueError("item is not an object")
             name = item.get("name")
             category = item.get("category")
-            if not isinstance(name, str) or not name.strip() or not isinstance(category, str) or not category.strip():
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(category, str)
+                or not category.strip()
+            ):
                 raise ValueError("name and category are required")
-            weight = 50.0 if item.get("recommended_weight") is None else _provider_float(item.get("recommended_weight"), "recommended_weight")
+            weight = (
+                50.0
+                if item.get("recommended_weight") is None
+                else _provider_float(item.get("recommended_weight"), "recommended_weight")
+            )
             if weight < 0 or weight > 100:
                 raise ValueError("recommended_weight must be between 0 and 100")
             valid.append({
@@ -1500,7 +1630,43 @@ def ai_suggest_metrics(decision_id: int, body: dict, db: Session = Depends(get_d
             })
         except ValueError:
             continue
-    return {"metric_suggestions": valid, "questions_for_user": output.get("questions_for_user", []) if isinstance(output.get("questions_for_user", []), list) else []}
+
+    raw_selection_recs = output.get("metric_selection_recommendations", [])
+    if raw_selection_recs is None:
+        raw_selection_recs = []
+    if not isinstance(raw_selection_recs, list):
+        raise HTTPException(status_code=502, detail="AI provider returned malformed output")
+    selection_recommendations = []
+    seen_metric_ids = set()
+    for item in raw_selection_recs:
+        try:
+            if not isinstance(item, dict):
+                raise ValueError("item is not an object")
+            metric_name = item.get("metric_name")
+            if not isinstance(metric_name, str) or metric_name.strip() not in metric_by_name:
+                continue
+            metric = metric_by_name[metric_name.strip()]
+            if metric.id in seen_metric_ids:
+                continue
+            selection_recommendations.append({
+                "metric_id": metric.id,
+                "metric_name": metric.name,
+                "recommended_included": _provider_bool(
+                    item.get("recommended_included"), "recommended_included"
+                ),
+                "rationale": str(item.get("rationale") or "")[:1000],
+            })
+            seen_metric_ids.add(metric.id)
+        except ValueError:
+            continue
+
+    return {
+        "metric_suggestions": valid,
+        "metric_selection_recommendations": selection_recommendations,
+        "questions_for_user": output.get("questions_for_user", [])
+        if isinstance(output.get("questions_for_user", []), list)
+        else [],
+    }
 
 
 @router.post("/decisions/{decision_id}/ai/optimize-weights")
@@ -1510,7 +1676,11 @@ def ai_optimize_weights(decision_id: int, body: dict, db: Session = Depends(get_
     caps = get_ai_caps()
     max_items = _validate_ai_max_field(body, "max_suggestions", caps["max_metric_suggestions"])
     activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
-    metrics = db.query(Metric).filter(Metric.id.in_(_decision_metric_ids(decision_id, db))).all()
+    allowed_metric_ids = _decision_metric_ids(decision_id, db)
+    if not allowed_metric_ids:
+        raise HTTPException(status_code=422, detail="No metrics found for this decision")
+    selected_metric_ids = _validate_ai_id_filter(body, "metric_ids", allowed_metric_ids)
+    metrics = db.query(Metric).filter(Metric.id.in_(selected_metric_ids)).all()
     metrics_context = [{"name": m.name, "category": m.category, "description": m.description or ""} for m in metrics]
     output = _ai_call_or_error(build_decision_context(
         decision, activities, metrics, body.get("user_context") or "",
@@ -1518,6 +1688,8 @@ def ai_optimize_weights(decision_id: int, body: dict, db: Session = Depends(get_
             "You are given an existing set of universal decision criteria (metrics) below. "
             "For this specific decision query, analyze which of these existing metrics are most relevant "
             "and recommend a weight (0-100) for each. Higher weight = more important. "
+            "Weights are independent importance ratings, not percentages. Do not normalize them, "
+            "do not make them add up to 100, and use the full 0-100 range per metric. "
             "Do NOT invent new criteria — only use the metric names provided in the list below. "
             'Return a JSON object with a top-level key "metric_recommendations" containing an array. '
             "Each item must have: metric_name (exactly matching one of the provided metric names), "
@@ -1548,6 +1720,76 @@ def ai_optimize_weights(decision_id: int, body: dict, db: Session = Depends(get_
         except ValueError:
             continue
     return {"metric_recommendations": valid, "questions_for_user": output.get("questions_for_user", []) if isinstance(output.get("questions_for_user", []), list) else []}
+
+
+@router.post("/decisions/{decision_id}/ai/suggest-ko")
+def ai_suggest_ko_criteria(decision_id: int, body: dict, db: Session = Depends(get_db)):
+    """Ask AI to recommend optional knock-out criteria for selected metrics."""
+    decision = _get_decision_or_404(decision_id, db)
+    all_metric_ids = _decision_metric_ids(decision_id, db)
+    if not all_metric_ids:
+        raise HTTPException(status_code=422, detail="No metrics found for this decision")
+    allowed_metric_ids = _validate_ai_id_filter(body, "metric_ids", all_metric_ids)
+    activities = db.query(Activity).filter(Activity.decision_id == decision_id).all()
+    metrics = db.query(Metric).filter(Metric.id.in_(allowed_metric_ids)).all()
+    metric_by_name = {m.name: m for m in metrics}
+    output = _ai_call_or_error(build_decision_context(
+        decision,
+        activities,
+        metrics,
+        body.get("user_context") or "",
+        instruction=(
+            "Return JSON only. Recommend knock-out criteria for this decision. "
+            "A knock-out criterion is a hard, non-negotiable minimum score that eliminates an alternative "
+            "before ranking if it fails. Do not recommend KO criteria just because a metric is important; "
+            "weights handle ordinary importance. Recommend active=true only for true must-have requirements. "
+            "Use only the exact metric names provided. Each recommendation must have: metric_name, "
+            "active (boolean), ko_operator (use >= for minimum fit thresholds), ko_value (0-100, required "
+            "when active=true), and rationale. Include inactive recommendations when a metric should not be a KO. "
+            'Return a top-level key "ko_recommendations" containing an array and "questions_for_user" if needed.'
+        ),
+    ))
+    raw_recs = output.get("ko_recommendations", [])
+    if not isinstance(raw_recs, list):
+        raise HTTPException(status_code=502, detail="AI provider returned malformed output")
+    recommendations = []
+    seen_metric_ids = set()
+    for item in raw_recs:
+        try:
+            if not isinstance(item, dict):
+                raise ValueError("item is not an object")
+            metric_name = item.get("metric_name")
+            if not isinstance(metric_name, str) or metric_name.strip() not in metric_by_name:
+                continue
+            metric = metric_by_name[metric_name.strip()]
+            if metric.id in seen_metric_ids:
+                continue
+            active = _provider_bool(item.get("active"), "active")
+            ko_operator = item.get("ko_operator") or ">="
+            if not isinstance(ko_operator, str) or ko_operator not in {">=", ">", "<=", "<"}:
+                raise ValueError("invalid ko_operator")
+            ko_value = None
+            if active:
+                ko_value = _provider_float(item.get("ko_value"), "ko_value")
+                if ko_value < 0 or ko_value > 100:
+                    raise ValueError("ko_value must be between 0 and 100")
+            recommendations.append({
+                "metric_id": metric.id,
+                "metric_name": metric.name,
+                "active": active,
+                "ko_operator": ko_operator,
+                "ko_value": ko_value,
+                "rationale": str(item.get("rationale") or "")[:1000],
+            })
+            seen_metric_ids.add(metric.id)
+        except ValueError:
+            continue
+    return {
+        "ko_recommendations": recommendations,
+        "questions_for_user": output.get("questions_for_user", [])
+        if isinstance(output.get("questions_for_user", []), list)
+        else [],
+    }
 
 
 @router.post("/decisions/{decision_id}/ai/draft-evidence", status_code=201)

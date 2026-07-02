@@ -19,11 +19,14 @@ import type {
   AIAvailability,
   EvidenceItem,
   ScoreDraft,
-  AIMetricSuggestion,
   AIMetricRecommendation,
+  AIMetricSuggestionResponse,
+  AIKoRecommendationResponse,
   AIEvidenceResponse,
   AIScoreDraftResponse,
   AIResultSummaryResponse,
+  KoCriteriaResponse,
+  KoCriterion,
 } from "@/types";
 
 const API_BASE = "/api";
@@ -166,12 +169,20 @@ export const api = {
     return request("/ai/status");
   },
 
-  suggestMetricsWithAI(decisionId: number, data: { user_context?: string; max_suggestions?: number }): Promise<{ metric_suggestions: AIMetricSuggestion[]; questions_for_user: string[] }> {
+  suggestMetricsWithAI(decisionId: number, data: { user_context?: string; max_suggestions?: number }): Promise<AIMetricSuggestionResponse> {
     return request(`/decisions/${decisionId}/ai/suggest-metrics`, { method: "POST", body: JSON.stringify(data) });
   },
 
-  optimizeWeightsWithAI(decisionId: number, data: { user_context?: string; max_suggestions?: number }): Promise<{ metric_recommendations: AIMetricRecommendation[]; questions_for_user: string[] }> {
+  optimizeWeightsWithAI(decisionId: number, data: { user_context?: string; metric_ids?: number[]; max_suggestions?: number }): Promise<{ metric_recommendations: AIMetricRecommendation[]; questions_for_user: string[] }> {
     return request(`/decisions/${decisionId}/ai/optimize-weights`, { method: "POST", body: JSON.stringify(data) });
+  },
+
+  suggestKnockoutsWithAI(decisionId: number, data: { user_context?: string; metric_ids?: number[] }): Promise<AIKoRecommendationResponse> {
+    return request(`/decisions/${decisionId}/ai/suggest-ko`, { method: "POST", body: JSON.stringify(data) });
+  },
+
+  updateKoCriteria(decisionId: number, koCriteria: KoCriterion[]): Promise<KoCriteriaResponse> {
+    return request(`/decisions/${decisionId}/ko-criteria`, { method: "POST", body: JSON.stringify({ ko_criteria: koCriteria }) });
   },
 
   draftEvidenceWithAI(decisionId: number, data: { user_context?: string; activity_ids?: number[]; metric_ids?: number[]; include_general_evidence?: boolean; max_items?: number }): Promise<AIEvidenceResponse> {

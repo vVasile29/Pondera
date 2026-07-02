@@ -309,6 +309,10 @@ export interface RefineResponse {
   ko_criteria: KoCriterion[];
 }
 
+export interface KoCriteriaResponse {
+  ko_criteria: KoCriterion[];
+}
+
 export interface ScorePayload {
   scores: Array<{
     activity_id: number;
@@ -399,10 +403,37 @@ export interface AIMetricSuggestion {
   source: string;
 }
 
+export interface AIMetricSelectionRecommendation {
+  metric_id: number;
+  metric_name: string;
+  recommended_included: boolean;
+  rationale: string;
+}
+
+export interface AIMetricSuggestionResponse {
+  metric_suggestions: AIMetricSuggestion[];
+  metric_selection_recommendations: AIMetricSelectionRecommendation[];
+  questions_for_user: string[];
+}
+
 export interface AIMetricRecommendation {
   metric_name: string;
   recommended_weight: number;
   rationale: string;
+}
+
+export interface AIKoRecommendation {
+  metric_id: number;
+  metric_name: string;
+  active: boolean;
+  ko_operator: string;
+  ko_value: number | null;
+  rationale: string;
+}
+
+export interface AIKoRecommendationResponse {
+  ko_recommendations: AIKoRecommendation[];
+  questions_for_user: string[];
 }
 
 export interface AIScoreDraftResponse {

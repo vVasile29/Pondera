@@ -178,9 +178,9 @@ export default function Results() {
             <p className="text-sm text-muted-foreground">
               Score your alternatives to see the results.
             </p>
-            <Button onClick={() => navigate(`/decisions/${decisionId}/review`)}>
+            <Button onClick={() => navigate(`/decisions/${decisionId}/review?step=score`)}>
               <ArrowRight className="mr-2 h-4 w-4" />
-              Go to Review
+              Go to Scoring
             </Button>
           </CardContent>
         </Card>
@@ -203,7 +203,7 @@ export default function Results() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => navigate(`/decisions/${decisionId}/review`)}
+            onClick={() => navigate(`/decisions/${decisionId}/review?step=score`)}
           >
             Review / re-score
           </Button>

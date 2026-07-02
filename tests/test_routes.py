@@ -853,6 +853,62 @@ def test_decision_result_threshold_panel_renders(client, db):
     assert all(tc["operator"] == ">=" for tc in data["threshold_criteria"])
 
 
+def test_refine_preserves_scores_for_unchanged_alternatives_and_metrics(client, db):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    detail = client.get(f"/api/decisions/{decision_id}").json()
+    score_payload = [
+        {"activity_id": activity["id"], "metric_id": metric_id, "score": 80 if index == 0 else 60}
+        for index, activity in enumerate(detail["activities"])
+    ]
+    scored = client.post(f"/api/decisions/{decision_id}/score", json={"scores": score_payload})
+    assert scored.status_code == 200
+
+    refined = client.post(
+        f"/api/decisions/{decision_id}/refine",
+        json={
+            "alternatives": [activity["name"] for activity in detail["activities"]],
+            "metrics": [{"metric_id": metric_id, "weight": 90}],
+        },
+    )
+
+    assert refined.status_code == 200
+    assert db.query(AlternativeScore).count() == 2
+    updated = client.get(f"/api/decisions/{decision_id}").json()
+    row = updated["rows"][0]
+    scores_by_name = {
+        activity["name"]: row["scores"][str(activity["id"])]
+        if str(activity["id"]) in row["scores"]
+        else row["scores"][activity["id"]]
+        for activity in updated["activities"]
+    }
+    assert scores_by_name == {"House": 80.0, "Apartment": 60.0}
+    assert row["weight"] == 90
+
+
+def test_update_ko_criteria_does_not_touch_scores(client, db):
+    decision_id, metric_id = _create_decision_with_metric(client, db)
+    detail = client.get(f"/api/decisions/{decision_id}").json()
+    score_payload = [
+        {"activity_id": activity["id"], "metric_id": metric_id, "score": 75}
+        for activity in detail["activities"]
+    ]
+    assert client.post(f"/api/decisions/{decision_id}/score", json={"scores": score_payload}).status_code == 200
+
+    response = client.post(
+        f"/api/decisions/{decision_id}/ko-criteria",
+        json={"ko_criteria": [{"metric_id": metric_id, "ko_operator": ">=", "ko_value": 70}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ko_criteria"] == [
+        {"metric_id": metric_id, "ko_operator": ">=", "ko_value": 70.0}
+    ]
+    assert db.query(AlternativeScore).count() == 2
+    updated = client.get(f"/api/decisions/{decision_id}").json()
+    assert updated["ko_criteria"][0]["ko_value"] == 70.0
+    assert all(updated["rows"][0]["scores"].values())
+
+
 def test_seeded_fit_metrics_have_current_shape(db):
     metrics = {
         m.name: m
@@ -2235,17 +2291,20 @@ class TestCustomMetrics:
         assert "name is required" in resp.json()["detail"].lower()
 
     def test_create_custom_metric_reserved_legacy_name(self, client, db):
-        """Reserved legacy name 'Cost' → 422."""
-        assert "Cost" in RESERVED_LEGACY_METRIC_NAMES
+        """Reserved legacy names explain the current replacement metric."""
+        assert "Convenience" in RESERVED_LEGACY_METRIC_NAMES
         decide = client.post("/api/decide", json={"q": "Pick one"})
         dec_id = decide.json()["decision_id"]
 
         resp = client.post(
             f"/api/decisions/{dec_id}/custom-metrics",
-            json={"name": "Cost", "category": "Resource Fit"},
+            json={"name": "Convenience", "category": "Practical Fit"},
         )
         assert resp.status_code == 422
-        assert "reserved" in resp.json()["detail"].lower()
+        detail = resp.json()["detail"]
+        assert "reserved" in detail.lower()
+        assert "legacy seed migration" in detail
+        assert "Feasibility" in detail
 
     def test_create_custom_metric_unknown_decision(self, client, db):
         """Non-existent decision → 404."""
@@ -2964,6 +3023,133 @@ class TestEvidenceAndScoreDrafts:
         assert suggestions.status_code == 200
         assert suggestions.json()["metric_suggestions"][0]["name"] == "Affordability"
         assert suggestions.json()["metric_suggestions"][1]["recommended_weight"] == 70
+
+    def test_ai_metric_suggestions_include_selection_recommendations(self, client, db, monkeypatch):
+        decision_id, _, metric_id = self._decision_cell(client)
+        metric = db.query(Metric).filter(Metric.id == metric_id).one()
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        def fake_ai(_prompt):
+            return {
+                "metric_suggestions": [
+                    {
+                        "name": "Commute Comfort",
+                        "category": "Practical Fit",
+                        "description": "How pleasant the commute feels day to day.",
+                        "recommended_weight": 72,
+                        "why_it_matters": "The custom metric captures the decision-specific fit.",
+                    }
+                ],
+                "metric_selection_recommendations": [
+                    {
+                        "metric_name": metric.name,
+                        "recommended_included": False,
+                        "rationale": "Covered by the proposed custom criterion.",
+                    }
+                ],
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_ai(prompt))
+        response = client.post(f"/api/decisions/{decision_id}/ai/suggest-metrics", json={})
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["metric_suggestions"][0]["name"] == "Commute Comfort"
+        assert payload["metric_selection_recommendations"] == [
+            {
+                "metric_id": metric.id,
+                "metric_name": metric.name,
+                "recommended_included": False,
+                "rationale": "Covered by the proposed custom criterion.",
+            }
+        ]
+
+    def test_ai_weight_optimization_honors_selected_metric_ids(self, client, monkeypatch):
+        response = client.post("/api/decide", json={"q": "Choose a laptop"})
+        assert response.status_code == 200
+        decision_id = response.json()["decision_id"]
+        detail = client.get(f"/api/decisions/{decision_id}").json()
+        selected_metric = detail["metrics"][0]
+        omitted_metric = detail["metrics"][1]
+        captured_prompts = []
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        def fake_ai(prompt):
+            captured_prompts.append(prompt)
+            return {
+                "metric_recommendations": [
+                    {
+                        "metric_name": selected_metric["name"],
+                        "recommended_weight": 88,
+                        "rationale": "Important for this decision.",
+                    },
+                    {
+                        "metric_name": omitted_metric["name"],
+                        "recommended_weight": 12,
+                        "rationale": "Should be ignored because it was not selected.",
+                    },
+                ],
+                "questions_for_user": [],
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_ai(prompt))
+        optimize = client.post(
+            f"/api/decisions/{decision_id}/ai/optimize-weights",
+            json={"metric_ids": [selected_metric["id"]]},
+        )
+
+        assert optimize.status_code == 200
+        payload = optimize.json()
+        assert payload["metric_recommendations"] == [
+            {
+                "metric_name": selected_metric["name"],
+                "recommended_weight": 88.0,
+                "rationale": "Important for this decision.",
+            }
+        ]
+        assert captured_prompts
+        assert selected_metric["name"] in captured_prompts[0]
+        assert omitted_metric["name"] not in captured_prompts[0]
+
+    def test_ai_suggest_ko_recommendations_are_validated(self, client, db, monkeypatch):
+        decision_id, _, metric_id = self._decision_cell(client)
+        metric = db.query(Metric).filter(Metric.id == metric_id).one()
+        monkeypatch.setenv("AI_ENABLED", "true")
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        def fake_ai(_prompt):
+            return {
+                "ko_recommendations": [
+                    {
+                        "metric_name": metric.name,
+                        "active": True,
+                        "ko_operator": ">=",
+                        "ko_value": 65,
+                        "rationale": "This is a hard minimum for the decision.",
+                    }
+                ],
+                "questions_for_user": [],
+            }
+
+        monkeypatch.setattr("routers.api.OpenAIDecisionClient.structured_json", lambda self, prompt: fake_ai(prompt))
+        response = client.post(
+            f"/api/decisions/{decision_id}/ai/suggest-ko",
+            json={"metric_ids": [metric_id]},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["ko_recommendations"] == [
+            {
+                "metric_id": metric.id,
+                "metric_name": metric.name,
+                "active": True,
+                "ko_operator": ">=",
+                "ko_value": 65.0,
+                "rationale": "This is a hard minimum for the decision.",
+            }
+        ]
 
     def test_malformed_ai_output_is_safe(self, client, monkeypatch):
         decision_id, _, _ = self._decision_cell(client)

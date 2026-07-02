@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useDecision } from "@/hooks/useDecision";
 import { useScoring } from "@/hooks/useScoring";
 import { api } from "@/lib/api";
@@ -23,7 +23,7 @@ import {
   CheckCheck,
   Sparkles,
 } from "lucide-react";
-import type { AIAvailability, AIMetricSuggestion, AIMetricRecommendation, Metric, ScoreDraft, EvidenceItem } from "@/types";
+import type { AIAvailability, AIMetricSuggestion, AIMetricRecommendation, AIMetricSelectionRecommendation, AIKoRecommendation, Metric, ScoreDraft, EvidenceItem, DecisionDetail } from "@/types";
 
 const DIMENSION_ORDER = [
   "Resource Fit",
@@ -51,6 +51,49 @@ const FIT_CATEGORY_OPTIONS = [
   "People Fit",
   "Practical Fit",
 ];
+
+const STEP_CRITERIA = 1;
+const STEP_WEIGHTS = 2;
+const STEP_KO = 3;
+const STEP_SCORE = 4;
+
+function stepFromSearchParam(value: string | null): number {
+  if (value === "weights" || value === "2") return STEP_WEIGHTS;
+  if (value === "ko" || value === "knockouts" || value === "3") return STEP_KO;
+  if (value === "score" || value === "scoring" || value === "4") return STEP_SCORE;
+  return STEP_CRITERIA;
+}
+
+function stepToSearchParam(value: number): string | null {
+  if (value === STEP_WEIGHTS) return "weights";
+  if (value === STEP_KO) return "ko";
+  if (value === STEP_SCORE) return "score";
+  return null;
+}
+
+function addMetricToDecisionData(
+  current: DecisionDetail,
+  metric: Metric,
+  weight: number,
+): DecisionDetail {
+  if (current.metrics.some((m) => m.id === metric.id)) return current;
+  return {
+    ...current,
+    metrics: [...current.metrics, metric],
+    rows: [
+      ...current.rows,
+      {
+        metric_id: metric.id,
+        metric_name: metric.name,
+        metric_desc: metric.description || "",
+        metric_question: metric.question,
+        metric_anchors: metric.anchors ?? null,
+        weight,
+        scores: {},
+      },
+    ],
+  };
+}
 
 function AIContextField({
   value,
@@ -81,7 +124,8 @@ function AIContextField({
 export default function Review() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { data, loading, error: fetchError, refetch } = useDecision(id);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { data, loading, error: fetchError, refetch, updateData } = useDecision(id);
 
   const [alternatives, setAlternatives] = useState<string[]>([]);
   const [includedMetrics, setIncludedMetrics] = useState<
@@ -108,13 +152,16 @@ export default function Review() {
   const [editCustomDesc, setEditCustomDesc] = useState("");
 
   const [customApiError, setCustomApiError] = useState<string | null>(null);
-  const [step, setStep] = useState(1);
+  const [step, setStepState] = useState(() => stepFromSearchParam(searchParams.get("step")));
   const [aiStatus, setAiStatus] = useState<AIAvailability | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<AIMetricSuggestion[]>([]);
+  const [aiSelectionRecommendations, setAiSelectionRecommendations] = useState<Record<number, AIMetricSelectionRecommendation>>({});
   const [aiRecommendations, setAiRecommendations] = useState<Record<string, AIMetricRecommendation>>({});
+  const [aiKoRecommendations, setAiKoRecommendations] = useState<Record<number, AIKoRecommendation>>({});
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [userContext, setUserContext] = useState("");
+  const lastActivitySignatureRef = useRef<string>("");
 
   const {
     scores: scoreValues,
@@ -122,6 +169,22 @@ export default function Review() {
     submitting: scoresSubmitting,
     error: scoresError,
   } = useScoring(parseInt(id || "0"));
+
+  useEffect(() => {
+    setStepState(stepFromSearchParam(searchParams.get("step")));
+  }, [searchParams]);
+
+  const goToStep = useCallback((nextStep: number) => {
+    setStepState(nextStep);
+    const nextParams = new URLSearchParams(searchParams);
+    const stepParam = stepToSearchParam(nextStep);
+    if (stepParam) {
+      nextParams.set("step", stepParam);
+    } else {
+      nextParams.delete("step");
+    }
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // ── Helpers for score color/label ──
   function scoreColor(value: number): string {
@@ -138,13 +201,16 @@ export default function Review() {
     return "Poor";
   }
 
-  // Initialize state from fetched decision data
+  // Initialize/merge state from fetched decision data without clobbering local review edits.
   useEffect(() => {
     if (!data) return;
 
-    setAlternatives(data.activities.map((a) => a.name));
+    const activitySignature = data.activities.map((a) => `${a.id}:${a.name}`).join("|");
+    if (activitySignature !== lastActivitySignatureRef.current) {
+      setAlternatives(data.activities.map((a) => a.name));
+      lastActivitySignatureRef.current = activitySignature;
+    }
 
-    // Build weight map from rows (which hold the weight per metric name)
     const weightMap: Record<string, number> = {};
     if (data.rows) {
       data.rows.forEach((row) => {
@@ -152,39 +218,48 @@ export default function Review() {
       });
     }
 
-    const included: Record<number, boolean> = {};
-    const weights: Record<number, number> = {};
-    data.metrics.forEach((m) => {
-      included[m.id] = true;
-      weights[m.id] = weightMap[m.name] ?? 50;
-    });
-
-    setIncludedMetrics(included);
-    setMetricWeights(weights);
-
-    // Initialize KO criteria from existing data
-    const koInit: Record<number, number | null> = {};
-    if (data.ko_criteria) {
-      data.ko_criteria.forEach((kc) => {
-        koInit[kc.metric_id] = kc.ko_value;
+    const metricIds = new Set(data.metrics.map((m) => m.id));
+    setIncludedMetrics((prev) => {
+      const next: Record<number, boolean> = {};
+      data.metrics.forEach((m) => {
+        next[m.id] = prev[m.id] ?? true;
       });
-    }
-    data.metrics.forEach((m) => {
-      if (!(m.id in koInit)) {
-        koInit[m.id] = null;
-      }
+      return next;
     });
-    setKoThresholds(koInit);
+    setMetricWeights((prev) => {
+      const next: Record<number, number> = {};
+      data.metrics.forEach((m) => {
+        next[m.id] = prev[m.id] ?? weightMap[m.name] ?? 50;
+      });
+      return next;
+    });
+
+    const koFromData: Record<number, number | null> = {};
+    data.ko_criteria?.forEach((kc) => {
+      koFromData[kc.metric_id] = kc.ko_value;
+    });
+    setKoThresholds((prev) => {
+      const next: Record<number, number | null> = {};
+      data.metrics.forEach((m) => {
+        next[m.id] = Object.prototype.hasOwnProperty.call(prev, m.id)
+          ? prev[m.id]
+          : koFromData[m.id] ?? null;
+      });
+      Object.keys(next).forEach((metricId) => {
+        if (!metricIds.has(Number(metricId))) delete next[Number(metricId)];
+      });
+      return next;
+    });
   }, [data]);
 
   useEffect(() => {
     api.getAIStatus().then(setAiStatus).catch(() => setAiStatus(null));
   }, []);
 
-  // Pre-populate scores when entering Step 3
+  // Pre-populate scores when entering Step 4
   const [scoresPrePopulated, setScoresPrePopulated] = useState(false);
   useEffect(() => {
-    if (step !== 3 || scoresPrePopulated || !data || !data.rows) return;
+    if (step !== STEP_SCORE || scoresPrePopulated || !data || !data.rows) return;
     const nameToId = new Map(data.metrics.map((m) => [m.name, m.id]));
     let found = false;
     data.rows.forEach((row) => {
@@ -200,7 +275,7 @@ export default function Review() {
     setScoresPrePopulated(found);
   }, [step, scoresPrePopulated, data, updateScore]);
 
-  // ── Evidence + AI Score Drafts (Step 3) ──
+  // ── Evidence + AI Score Drafts (Step 4) ──
   const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
   const [scoreDrafts, setScoreDrafts] = useState<ScoreDraft[]>([]);
   const [manualEvidenceClaims, setManualEvidenceClaims] = useState<Record<string, string>>({});
@@ -218,9 +293,19 @@ export default function Review() {
   }, [id]);
 
   useEffect(() => {
-    if (step !== 3) return;
+    if (step !== STEP_SCORE) return;
     refreshEvidenceDrafts().catch(() => undefined);
   }, [step, refreshEvidenceDrafts]);
+
+  const getPersistedScore = useCallback((activityId: number, metricId: number) => {
+    const row = data?.rows.find((r) => r.metric_id === metricId);
+    return row?.scores?.[activityId];
+  }, [data]);
+
+  const getScoreValue = useCallback((activityId: number, metricId: number) => {
+    const key = `${activityId}_${metricId}`;
+    return scoreValues[key] ?? getPersistedScore(activityId, metricId) ?? 0;
+  }, [getPersistedScore, scoreValues]);
 
   const handleDraftEvidence = async () => {
     if (!id || !data) return;
@@ -331,6 +416,29 @@ export default function Review() {
           DIMENSION_ORDER.indexOf(b.dimension),
       );
   }, [data]);
+
+  const selectedMetrics = useMemo(
+    () => (data?.metrics ?? []).filter((metric) => includedMetrics[metric.id] ?? true),
+    [data, includedMetrics],
+  );
+
+  const groupedSelectedMetrics = useMemo(() => {
+    const groups: Record<string, Metric[]> = {};
+    selectedMetrics.forEach((m) => {
+      const cat = m.category || "General";
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(m);
+    });
+
+    return Object.entries(groups)
+      .map(([dimension, metrics]) => ({ dimension, metrics }))
+      .sort(
+        (a, b) =>
+          DIMENSION_ORDER.indexOf(a.dimension) -
+          DIMENSION_ORDER.indexOf(b.dimension),
+      );
+  }, [selectedMetrics]);
+
   // Group AI suggestions by category
   const groupedAiSuggestions = useMemo(() => {
     const groups: Record<string, { index: number; suggestion: AIMetricSuggestion }[]> = {};
@@ -440,8 +548,7 @@ export default function Review() {
       setKoThresholds((prev) => ({ ...prev, [result.id]: null }));
       resetAddForm();
 
-      // Refetch so data.metrics includes the new metric
-      refetch();
+      updateData((current) => addMetricToDecisionData(current, result, 50));
     } catch (e: any) {
       setCustomApiError(e.message || "Failed to create custom metric.");
     }
@@ -480,7 +587,19 @@ export default function Review() {
         description: editCustomDesc.trim() || undefined,
       });
       setEditingCustomId(null);
-      refetch();
+      updateData((current) => ({
+        ...current,
+        metrics: current.metrics.map((m) =>
+          m.id === metricId
+            ? { ...m, name: editCustomName.trim(), category: editCustomCategory.trim(), description: editCustomDesc.trim() || "" }
+            : m,
+        ),
+        rows: current.rows.map((row) =>
+          row.metric_id === metricId
+            ? { ...row, metric_name: editCustomName.trim(), metric_desc: editCustomDesc.trim() || "" }
+            : row,
+        ),
+      }));
     } catch (e: any) {
       setCustomApiError(e.message || "Failed to update custom metric.");
     }
@@ -507,7 +626,14 @@ export default function Review() {
         delete next[metricId];
         return next;
       });
-      refetch();
+      updateData((current) => ({
+        ...current,
+        metrics: current.metrics.filter((m) => m.id !== metricId),
+        rows: current.rows.filter((row) => row.metric_id !== metricId),
+        metric_names: current.metric_names.filter(
+          (name) => name !== current.metrics.find((m) => m.id === metricId)?.name,
+        ),
+      }));
     } catch (e: any) {
       setCustomApiError(e.message || "Failed to delete custom metric.");
     }
@@ -518,10 +644,26 @@ export default function Review() {
     setAiBusy(true);
     setAiMessage(null);
     setAiSuggestions([]);
+    setAiSelectionRecommendations({});
     try {
       const res = await api.suggestMetricsWithAI(parseInt(id), { user_context: userContext || undefined });
       setAiSuggestions(res.metric_suggestions);
-      setAiMessage(`AI suggested ${res.metric_suggestions.length} criteria. Review each row and accept or reject it.`);
+      const selectionRecs: Record<number, AIMetricSelectionRecommendation> = {};
+      res.metric_selection_recommendations.forEach((rec) => {
+        selectionRecs[rec.metric_id] = rec;
+      });
+      setAiSelectionRecommendations(selectionRecs);
+      if (res.metric_selection_recommendations.length > 0) {
+        setIncludedMetrics((prev) => {
+          const next = { ...prev };
+          res.metric_selection_recommendations.forEach((rec) => {
+            next[rec.metric_id] = rec.recommended_included;
+          });
+          return next;
+        });
+      }
+      const selectionCount = res.metric_selection_recommendations.length;
+      setAiMessage(`AI suggested ${res.metric_suggestions.length} new criteria and reviewed ${selectionCount} existing criterion selection(s). Review each row and accept or reject it.`);
     } catch (e: any) {
       setAiMessage(e.message || "AI metric suggestion failed.");
     } finally {
@@ -555,8 +697,8 @@ export default function Review() {
       setMetricWeights((prev) => ({ ...prev, [created.id]: suggestion.recommended_weight ?? 50 }));
       setIncludedMetrics((prev) => ({ ...prev, [created.id]: true }));
       setKoThresholds((prev) => ({ ...prev, [created.id]: null }));
+      updateData((current) => addMetricToDecisionData(current, created, suggestion.recommended_weight ?? 50));
       setAiSuggestions((prev) => prev.filter((_, i) => i !== index));
-      await refetch();
       setAiMessage(`Added "${created.name}".`);
     } catch (e: any) {
       setAiMessage(e.message || "Failed to add AI suggestion.");
@@ -571,19 +713,50 @@ export default function Review() {
     if (rejected) setAiMessage(`Rejected "${rejected}".`);
   };
 
+  const applyAiSelectionRecommendation = (metricId: number) => {
+    const rec = aiSelectionRecommendations[metricId];
+    if (!rec) return;
+    setIncludedMetrics((prev) => ({ ...prev, [metricId]: rec.recommended_included }));
+    setAiSelectionRecommendations((prev) => {
+      const next = { ...prev };
+      delete next[metricId];
+      return next;
+    });
+    setAiMessage(`${rec.metric_name} ${rec.recommended_included ? "included" : "excluded"} based on AI selection guidance.`);
+  };
+
+  const rejectAiSelectionRecommendation = (metricId: number) => {
+    setAiSelectionRecommendations((prev) => {
+      const next = { ...prev };
+      delete next[metricId];
+      return next;
+    });
+  };
+
   const handleOptimizeWeights = async () => {
-    if (!id) return;
+    if (!id || !data) return;
+    const selectedMetricIds = selectedMetrics.map((metric) => metric.id);
+    const selectedMetricNames = new Set(selectedMetrics.map((metric) => metric.name));
+    if (selectedMetricIds.length === 0) {
+      setAiMessage("Select at least one criterion before optimizing weights.");
+      return;
+    }
     setAiBusy(true);
     setAiMessage(null);
     setAiRecommendations({});
     try {
-      const res = await api.optimizeWeightsWithAI(parseInt(id), { user_context: userContext || undefined });
+      const res = await api.optimizeWeightsWithAI(parseInt(id), {
+        user_context: userContext || undefined,
+        metric_ids: selectedMetricIds,
+      });
       const recs: Record<string, AIMetricRecommendation> = {};
       for (const r of res.metric_recommendations) {
-        recs[r.metric_name] = r;
+        if (selectedMetricNames.has(r.metric_name)) {
+          recs[r.metric_name] = r;
+        }
       }
       setAiRecommendations(recs);
-      const count = res.metric_recommendations.length;
+      const count = Object.keys(recs).length;
       setAiMessage(`AI recommended weight adjustments for ${count} metric(s). Click "Apply" to accept.`);
     } catch (e: any) {
       setAiMessage(e.message || "AI recommendation failed.");
@@ -616,6 +789,52 @@ export default function Review() {
     setAiMessage(null);
   };
 
+  const handleSuggestKo = async () => {
+    if (!id || !data) return;
+    const selectedMetricIds = data.metrics.filter((m) => includedMetrics[m.id]).map((m) => m.id);
+    setAiBusy(true);
+    setAiMessage(null);
+    setAiKoRecommendations({});
+    try {
+      const res = await api.suggestKnockoutsWithAI(parseInt(id), {
+        user_context: userContext || undefined,
+        metric_ids: selectedMetricIds,
+      });
+      const recs: Record<number, AIKoRecommendation> = {};
+      res.ko_recommendations.forEach((rec) => {
+        recs[rec.metric_id] = rec;
+      });
+      setAiKoRecommendations(recs);
+      setAiMessage(`AI reviewed ${res.ko_recommendations.length} potential knock-out criterion/criteria. Apply only true must-haves.`);
+    } catch (e: any) {
+      setAiMessage(e.message || "AI knock-out recommendation failed.");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const applyAiKoRecommendation = (metricId: number) => {
+    const rec = aiKoRecommendations[metricId];
+    if (!rec) return;
+    setKoThresholds((prev) => ({
+      ...prev,
+      [metricId]: rec.active ? rec.ko_value ?? 50 : null,
+    }));
+    setAiKoRecommendations((prev) => {
+      const next = { ...prev };
+      delete next[metricId];
+      return next;
+    });
+  };
+
+  const rejectAiKoRecommendation = (metricId: number) => {
+    setAiKoRecommendations((prev) => {
+      const next = { ...prev };
+      delete next[metricId];
+      return next;
+    });
+  };
+
   // ── Validation helper ──
 
   const validateForm = (): { valid: boolean; validAlternatives: string[]; selectedMetrics: number[] } => {
@@ -640,9 +859,9 @@ export default function Review() {
     return { valid: errors.length === 0, validAlternatives, selectedMetrics };
   };
 
-  // ── Step 2 → Step 3 (validate + refineDecision so DecisionWeight records exist for AI) ──
+  // ── Step 2 → Step 3: save alternatives and weights before KO review ──
 
-  const handleAdvanceToScoring = async () => {
+  const handleAdvanceToKo = async () => {
     setSubmitError(null);
     setValidationErrors([]);
 
@@ -656,25 +875,45 @@ export default function Review() {
         metric_id: metricId,
         weight: metricWeights[metricId] ?? 50,
       }));
-      const koPayload = Object.entries(koThresholds)
-        .filter(([, value]) => value !== null)
-        .map(([metricIdStr, value]) => ({
-          metric_id: parseInt(metricIdStr),
-          ko_operator: ">=",
-          ko_value: value!,
-        }));
 
       await api.refineDecision(numId, {
         alternatives: validAlternatives,
         metrics: metricsPayload,
-        ko_criteria: koPayload.length > 0 ? koPayload : undefined,
       });
 
-      setScoresPrePopulated(false);
-      await refetch();
-      setStep(3);
+      await refetch({ silent: true });
+      goToStep(STEP_KO);
     } catch (e: any) {
       setSubmitError(e.message || "Failed to save. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Step 3 → Step 4: save KO criteria without touching scores ──
+
+  const handleAdvanceToScoring = async () => {
+    setSubmitError(null);
+    setValidationErrors([]);
+
+    if (!id || !data) return;
+    const selectedMetricIds = data.metrics.filter((m) => includedMetrics[m.id]).map((m) => m.id);
+    const koPayload = Object.entries(koThresholds)
+      .filter(([metricIdStr, value]) => selectedMetricIds.includes(Number(metricIdStr)) && value !== null)
+      .map(([metricIdStr, value]) => ({
+        metric_id: parseInt(metricIdStr),
+        ko_operator: ">=",
+        ko_value: value!,
+      }));
+
+    setSubmitting(true);
+    try {
+      await api.updateKoCriteria(parseInt(id), koPayload);
+      setScoresPrePopulated(false);
+      await refetch({ silent: true });
+      goToStep(STEP_SCORE);
+    } catch (e: any) {
+      setSubmitError(e.message || "Failed to save knock-out criteria.");
     } finally {
       setSubmitting(false);
     }
@@ -691,7 +930,7 @@ export default function Review() {
       selectedMetrics.map((metric) => ({
         activity_id: activity.id,
         metric_id: metric.id,
-        score: scoreValues[`${activity.id}_${metric.id}`] ?? 0,
+        score: getScoreValue(activity.id, metric.id),
       })),
     );
 
@@ -817,7 +1056,7 @@ export default function Review() {
     );
   };
 
-  const stepLabels = ["Set Criteria", "Set Weights", "Score"];
+  const stepLabels = ["Set Criteria", "Set Weights", "Knock-Outs", "Score"];
 
   return (
     <div className="container mx-auto py-8 px-4 max-w-4xl space-y-8">
@@ -960,6 +1199,20 @@ export default function Review() {
                               </div>
                             )}
                           </div>
+                          {aiSelectionRecommendations[metric.id] && (
+                            <div className="mt-2 rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-2 flex flex-wrap items-center gap-2">
+                              <Badge variant="outline" className="text-[10px]">
+                                AI recommends {aiSelectionRecommendations[metric.id].recommended_included ? "include" : "exclude"}
+                              </Badge>
+                              <span className="text-xs text-blue-700 dark:text-blue-300">
+                                {aiSelectionRecommendations[metric.id].rationale}
+                              </span>
+                              <div className="flex items-center gap-1 ml-auto">
+                                <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => applyAiSelectionRecommendation(metric.id)}>Apply</Button>
+                                <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => rejectAiSelectionRecommendation(metric.id)}>Dismiss</Button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -1064,7 +1317,7 @@ export default function Review() {
 
           {/* ── Step 1: Next button ── */}
           <div className="flex justify-end">
-            <Button onClick={() => setStep(2)} size="lg">
+            <Button onClick={() => goToStep(STEP_WEIGHTS)} size="lg">
               Next: Set Weights <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
@@ -1085,15 +1338,13 @@ export default function Review() {
               <AIContextField value={userContext} onChange={setUserContext} />
 
               <p className="text-sm text-muted-foreground">
-                Every slider is a 0–100 fit score. Higher always means better fit.
-                Adjust weights to set priority. Click{" "}
-                <span className="font-semibold">KO</span> to set a minimum fit
-                threshold — alternatives scoring below are eliminated from results.
+                Each slider is an independent 0–100 importance rating for that criterion.
+                These weights are not percentages and do not need to add up to 100.
               </p>
 
               {/* ── AI Optimize button ── */}
               <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" onClick={handleOptimizeWeights} disabled={!aiStatus?.enabled || aiBusy} size="sm">
+                <Button variant="outline" onClick={handleOptimizeWeights} disabled={!aiStatus?.enabled || aiBusy || selectedMetrics.length === 0} size="sm">
                   {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Optimizing...</> : <><Sparkles className="h-4 w-4 mr-1" /> Optimize weights with AI</>}
                 </Button>
                 {Object.keys(aiRecommendations).length > 0 && (
@@ -1105,7 +1356,15 @@ export default function Review() {
               </div>
               {aiMessage && <p className="text-sm text-muted-foreground -mt-2">{aiMessage}</p>}
 
-              {groupedMetrics.map(({ dimension, metrics }) => (
+              {selectedMetrics.length === 0 && (
+                <Alert>
+                  <AlertDescription>
+                    No criteria are selected. Go back to Set Criteria and select at least one criterion to weight.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {groupedSelectedMetrics.map(({ dimension, metrics }) => (
                 <div key={dimension}>
                   <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">{dimension}</h3>
                   <div className="space-y-4">
@@ -1128,19 +1387,8 @@ export default function Review() {
                             </div>
                             <div className="flex items-center gap-2 justify-self-end mb-3 sm:mb-0">
                               <span className="text-sm font-mono w-10 text-right tabular-nums shrink-0">{metricWeights[metric.id] ?? 50}</span>
-                              <Button variant="outline" size="sm"
-                                className={`shrink-0 h-7 px-2 text-xs ${koThresholds[metric.id] !== null ? "bg-red-50 border-red-300 text-red-600 dark:bg-red-950 dark:border-red-800 dark:text-red-400" : ""}`}
-                                disabled={!includedMetrics[metric.id]} onClick={() => toggleKo(metric.id)}>KO</Button>
                             </div>
                           </div>
-                          {includedMetrics[metric.id] && koThresholds[metric.id] !== null && (
-                            <div className="sm:grid sm:grid-cols-[14rem_1fr_auto] sm:gap-x-4 sm:items-center sm:mt-2">
-                              <div className="flex items-start gap-2"><div className="w-4 shrink-0" /><span className="text-xs text-red-500 font-medium leading-tight mt-0.5">KO min threshold</span></div>
-                              <div><Slider value={[koThresholds[metric.id]!]} onValueChange={(v) => handleKoValueChange(metric.id, v[0])} min={0} max={100} step={1}
-                                className="[&_[role=slider]]:bg-red-500 [&_[role=slider]]:border-red-500 [&_.bg-primary]:bg-red-500 [&_[role=track]]:bg-red-200 dark:[&_[role=track]]:bg-red-950" /></div>
-                              <div className="flex items-center gap-2 justify-self-end"><span className="text-sm font-mono w-10 text-right tabular-nums text-red-600 dark:text-red-400">{koThresholds[metric.id]}</span></div>
-                            </div>
-                          )}
                           {/* ── AI recommendation inline per row ── */}
                           {aiRecommendations[metric.name] && (
                             <div className="mt-2 rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-2 flex flex-wrap items-center gap-2">
@@ -1165,20 +1413,116 @@ export default function Review() {
 
           {/* ── Step 2: Navigation ── */}
           <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStep(1)} size="lg">
+            <Button variant="outline" onClick={() => goToStep(STEP_CRITERIA)} size="lg">
               <ArrowLeft className="mr-2 h-4 w-4" /> Back: Set Criteria
             </Button>
-            <Button onClick={handleAdvanceToScoring} size="lg">
-              Next: Score <ArrowRight className="ml-2 h-4 w-4" />
+            <Button onClick={handleAdvanceToKo} size="lg">
+              Next: Knock-Outs <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
         </>
       )}
 
       {/* ════════════════════════════════════════
-          STEP 3: Score
+          STEP 3: Knock-Outs
           ════════════════════════════════════════ */}
-      {step === 3 && (
+      {step === STEP_KO && (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xl">Knock-Out Criteria</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <AIContextField value={userContext} onChange={setUserContext} />
+
+              <p className="text-sm text-muted-foreground">
+                Optional knock-out criteria are hard minimum fit requirements. Use them only for
+                true must-haves; ordinary priorities belong in weights and tradeoffs belong in scoring.
+              </p>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" onClick={handleSuggestKo} disabled={!aiStatus?.enabled || aiBusy} size="sm">
+                  {aiBusy ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Reviewing...</> : <><Sparkles className="h-4 w-4 mr-1" /> Suggest knock-outs with AI</>}
+                </Button>
+                {!aiStatus?.enabled && (
+                  <span className="text-xs text-muted-foreground">AI assistance is unavailable ({aiStatus?.reason ?? "disabled"}).</span>
+                )}
+              </div>
+              {aiMessage && <p className="text-sm text-muted-foreground -mt-2">{aiMessage}</p>}
+
+              <div className="space-y-5">
+                {data.metrics.filter((m) => includedMetrics[m.id]).map((metric) => {
+                  const active = koThresholds[metric.id] !== null && koThresholds[metric.id] !== undefined;
+                  const rec = aiKoRecommendations[metric.id];
+                  return (
+                    <div key={metric.id} className="rounded-lg border p-3 space-y-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Label className="font-medium leading-tight">{metric.name}</Label>
+                            {metric.scope === "decision" && <Badge variant="secondary" className="text-[10px] px-1.5 py-0 h-4">Custom</Badge>}
+                          </div>
+                          <p className="text-xs text-muted-foreground leading-tight mt-0.5">{metric.question ?? metric.description}</p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Checkbox
+                            id={`ko-${metric.id}`}
+                            checked={active}
+                            onCheckedChange={() => toggleKo(metric.id)}
+                          />
+                          <Label htmlFor={`ko-${metric.id}`} className="text-sm cursor-pointer">Use as KO</Label>
+                        </div>
+                      </div>
+
+                      {active && (
+                        <div className="sm:grid sm:grid-cols-[12rem_1fr_auto] sm:gap-x-4 sm:items-center">
+                          <span className="text-xs text-red-500 font-medium leading-tight">Minimum score</span>
+                          <Slider
+                            value={[koThresholds[metric.id] ?? 50]}
+                            onValueChange={(v) => handleKoValueChange(metric.id, v[0])}
+                            min={0}
+                            max={100}
+                            step={1}
+                            className="[&_[role=slider]]:bg-red-500 [&_[role=slider]]:border-red-500 [&_.bg-primary]:bg-red-500 [&_[role=track]]:bg-red-200 dark:[&_[role=track]]:bg-red-950"
+                          />
+                          <span className="text-sm font-mono w-10 text-right tabular-nums text-red-600 dark:text-red-400">{koThresholds[metric.id] ?? 50}</span>
+                        </div>
+                      )}
+
+                      {rec && (
+                        <div className="rounded border border-dashed border-blue-300 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800 p-2 flex flex-wrap items-center gap-2">
+                          <Badge variant="outline" className="text-[10px]">
+                            AI recommends {rec.active ? `KO ≥ ${rec.ko_value ?? 50}` : "no KO"}
+                          </Badge>
+                          <span className="text-xs text-blue-700 dark:text-blue-300">{rec.rationale}</span>
+                          <div className="flex items-center gap-1 ml-auto">
+                            <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => applyAiKoRecommendation(metric.id)}>Apply</Button>
+                            <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => rejectAiKoRecommendation(metric.id)}>Reject</Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="flex justify-between">
+            <Button variant="outline" onClick={() => goToStep(STEP_WEIGHTS)} size="lg">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back: Set Weights
+            </Button>
+            <Button onClick={handleAdvanceToScoring} disabled={submitting} size="lg">
+              {submitting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : <>Next: Score <ArrowRight className="ml-2 h-4 w-4" /></>}
+            </Button>
+          </div>
+        </>
+      )}
+
+      {/* ════════════════════════════════════════
+          STEP 4: Score
+          ════════════════════════════════════════ */}
+      {step === STEP_SCORE && (
         <>
           <Card>
             <CardHeader>
@@ -1227,7 +1571,7 @@ export default function Review() {
                         {metric.description && <span className="text-xs text-muted-foreground truncate">{metric.description}</span>}
                       </div>
                       {data.activities.map((act) => {
-                        const val = scoreValues[`${act.id}_${metric.id}`] ?? 0;
+                        const val = getScoreValue(act.id, metric.id);
                         return (
                           <div key={`${act.id}_${metric.id}`} className="p-3">
                             <div className="flex items-center gap-3">
@@ -1253,7 +1597,7 @@ export default function Review() {
                     <CardHeader><CardTitle className="text-lg">{act.name}</CardTitle></CardHeader>
                     <CardContent className="space-y-5">
                       {data.metrics.filter((m) => includedMetrics[m.id]).map((metric) => {
-                        const val = scoreValues[`${act.id}_${metric.id}`] ?? 0;
+                        const val = getScoreValue(act.id, metric.id);
                         return (
                           <div key={`${act.id}_${metric.id}`} className="space-y-2">
                             <div className="flex items-center justify-between">
@@ -1275,10 +1619,10 @@ export default function Review() {
             </CardContent>
           </Card>
 
-          {/* ── Step 3: Navigation + Submit ── */}
+          {/* ── Step 4: Navigation + Submit ── */}
           <div className="flex justify-between">
-            <Button variant="outline" onClick={() => setStep(2)} size="lg">
-              <ArrowLeft className="mr-2 h-4 w-4" /> Back: Set Weights
+            <Button variant="outline" onClick={() => goToStep(STEP_KO)} size="lg">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Back: Knock-Outs
             </Button>
             <Button onClick={handleFinalSubmit} disabled={submitting || scoresSubmitting} size="lg">
               {submitting || scoresSubmitting ? (
