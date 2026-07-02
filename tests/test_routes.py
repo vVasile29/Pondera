@@ -9,7 +9,7 @@ import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from database import Base, get_db
@@ -45,6 +45,13 @@ def db():
         f"sqlite:///{_test_db_path}",
         connect_args={"check_same_thread": False},
     )
+
+    @event.listens_for(_test_engine, "connect")
+    def _set_sqlite_fk(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(bind=_test_engine)
     TestSession = sessionmaker(autocommit=False, autoflush=False, bind=_test_engine)
     _test_session = TestSession()
@@ -1671,3 +1678,118 @@ def test_api_decision_rows_expose_sensitivity_scoring_fields(client, db):
     assert row["weight"] == 80
     assert data["results"][0]["activity_name"] == "Second"
     assert data["results"][0]["fit_score"] == 0.3
+
+
+class TestMetricsCrud:
+    """CRUD coverage for POST /api/metrics, PUT /api/metrics/{id}, DELETE /api/metrics/{id}."""
+
+    def test_create_metric_success(self, client, db):
+        resp = client.post("/api/metrics", json={
+            "name": "Test Metric",
+            "category": "Financial",
+            "description": "A test metric",
+        })
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "Test Metric"
+        assert data["category"] == "Financial"
+        assert data["description"] == "A test metric"
+        assert isinstance(data["id"], int)
+
+    def test_create_metric_duplicate_name(self, client, db):
+        client.post("/api/metrics", json={"name": "Dup", "category": "Quality", "description": ""})
+        resp = client.post("/api/metrics", json={"name": "Dup", "category": "Risk", "description": ""})
+        assert resp.status_code == 422
+        assert "already exists" in resp.json()["detail"]
+
+    def test_create_metric_missing_name(self, client, db):
+        resp = client.post("/api/metrics", json={"category": "General", "description": ""})
+        assert resp.status_code == 422
+        assert "name is required" in resp.json()["detail"].lower()
+
+    def test_create_metric_missing_category(self, client, db):
+        resp = client.post("/api/metrics", json={"name": "NoCat", "description": ""})
+        assert resp.status_code == 422
+        assert "category is required" in resp.json()["detail"].lower()
+
+    def test_create_metric_empty_name(self, client, db):
+        resp = client.post("/api/metrics", json={"name": "  ", "category": "General"})
+        assert resp.status_code == 422
+        assert "name is required" in resp.json()["detail"].lower()
+
+    def test_update_metric_success(self, client, db):
+        create = client.post("/api/metrics", json={"name": "Old", "category": "Financial", "description": "Old desc"})
+        mid = create.json()["id"]
+        resp = client.put(f"/api/metrics/{mid}", json={"name": "New Name", "category": "Quality", "description": "New desc"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "New Name"
+        assert data["category"] == "Quality"
+        assert data["description"] == "New desc"
+
+    def test_update_metric_not_found(self, client, db):
+        resp = client.put("/api/metrics/99999", json={"name": "Nope", "category": "General", "description": ""})
+        assert resp.status_code == 404
+
+    def test_update_metric_duplicate_name(self, client, db):
+        client.post("/api/metrics", json={"name": "Existing", "category": "Financial", "description": ""})
+        create2 = client.post("/api/metrics", json={"name": "Target", "category": "Quality", "description": ""})
+        mid2 = create2.json()["id"]
+        resp = client.put(f"/api/metrics/{mid2}", json={"name": "Existing", "category": "Risk", "description": ""})
+        assert resp.status_code == 422
+        assert "already exists" in resp.json()["detail"]
+
+    def test_delete_metric_success(self, client, db):
+        create = client.post("/api/metrics", json={"name": "Delete Me", "category": "Time", "description": ""})
+        mid = create.json()["id"]
+        resp = client.delete(f"/api/metrics/{mid}")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "deleted"}
+        # Verify gone
+        get_resp = client.get("/api/metrics")
+        all_ids = [m["id"] for group in get_resp.json()["grouped_metrics"].values() for m in group]
+        assert mid not in all_ids
+
+    def test_delete_metric_not_found(self, client, db):
+        resp = client.delete("/api/metrics/99999")
+        assert resp.status_code == 404
+
+    def test_delete_metric_cascades_to_scores_and_weights(self, client, db):
+        from models import DecisionWeight, AlternativeScore, Metric as MetricModel
+        
+        # Create a metric
+        create = client.post("/api/metrics", json={"name": "Cascade Metric", "category": "Financial", "description": ""})
+        metric_id = create.json()["id"]
+
+        # Create a decision with this metric
+        decide = client.post("/api/decide", json={"q": "Test cascade"})
+        dec_id = decide.json()["decision_id"]
+
+        # Refine to add the metric
+        client.post(f"/api/decisions/{dec_id}/refine", json={
+            "alternatives": ["A", "B"],
+            "metrics": [{"metric_id": metric_id, "weight": 80}],
+        })
+
+        # Score
+        detail = client.get(f"/api/decisions/{dec_id}").json()
+        act_ids = [a["id"] for a in detail["activities"]]
+        client.post(f"/api/decisions/{dec_id}/score", json={
+            "scores": [
+                {"activity_id": act_ids[0], "metric_id": metric_id, "score": 50},
+                {"activity_id": act_ids[1], "metric_id": metric_id, "score": 70},
+            ],
+        })
+
+        # Verify weights and scores exist
+        assert db.query(DecisionWeight).filter(DecisionWeight.metric_id == metric_id).count() > 0
+        assert db.query(AlternativeScore).filter(AlternativeScore.metric_id == metric_id).count() > 0
+
+        # Delete the metric
+        resp = client.delete(f"/api/metrics/{metric_id}")
+        assert resp.status_code == 200
+
+        # Verify cascade
+        assert db.query(DecisionWeight).filter(DecisionWeight.metric_id == metric_id).count() == 0
+        assert db.query(AlternativeScore).filter(AlternativeScore.metric_id == metric_id).count() == 0
+        assert db.query(MetricModel).filter(MetricModel.id == metric_id).count() == 0

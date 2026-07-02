@@ -13,6 +13,11 @@ async def lifespan(app: FastAPI):
     from database import Base, engine, SessionLocal
 
     Base.metadata.create_all(bind=engine)
+    # Seed re-creation: on every startup, metrics with names matching UNIVERSAL_DIMENSIONS
+    # are upserted by name. If a seed metric was deleted, it is re-inserted. If renamed,
+    # the old name is re-inserted as a new row and the renamed metric is preserved.
+    # If a seed metric's category or description was edited, it is overwritten by the
+    # seed defaults on restart.
     # Seed universal metrics and sync built-in metadata by name.
     from services.ontology import UNIVERSAL_DIMENSIONS
     from models import Metric

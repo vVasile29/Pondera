@@ -10,7 +10,7 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, ArrowRight, Plus, X } from "lucide-react";
-import type { KoCriterion, Metric } from "@/types";
+import type { Metric } from "@/types";
 
 const DIMENSION_ORDER = [
   "Financial",
@@ -36,7 +36,7 @@ export default function Review() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
-  const [koCriteria, setKoCriteria] = useState<Record<number, { enabled: boolean; operator: string; value: number }>>({});
+  const [koThresholds, setKoThresholds] = useState<Record<number, number | null>>({});
 
   // Initialize state from fetched decision data
   useEffect(() => {
@@ -63,18 +63,18 @@ export default function Review() {
     setMetricWeights(weights);
 
     // Initialize KO criteria from existing data
-    const koInit: Record<number, { enabled: boolean; operator: string; value: number }> = {};
+    const koInit: Record<number, number | null> = {};
     if (data.ko_criteria) {
       data.ko_criteria.forEach((kc) => {
-        koInit[kc.metric_id] = { enabled: true, operator: kc.ko_operator, value: kc.ko_value };
+        koInit[kc.metric_id] = kc.ko_value;
       });
     }
     data.metrics.forEach((m) => {
-      if (!koInit[m.id]) {
-        koInit[m.id] = { enabled: false, operator: ">=", value: 50 };
+      if (!(m.id in koInit)) {
+        koInit[m.id] = null;
       }
     });
-    setKoCriteria(koInit);
+    setKoThresholds(koInit);
   }, [data]);
 
   // Group metrics by dimension category, sorted in ontology order
@@ -114,9 +114,26 @@ export default function Review() {
   };
 
   const toggleMetric = (metricId: number) => {
-    setIncludedMetrics((prev) => ({
+    setIncludedMetrics((prev) => {
+      const next = { ...prev, [metricId]: !prev[metricId] };
+      if (!next[metricId]) {
+        setKoThresholds((kp) => ({ ...kp, [metricId]: null }));
+      }
+      return next;
+    });
+  };
+
+  const toggleKo = (metricId: number) => {
+    setKoThresholds((prev) => ({
       ...prev,
-      [metricId]: !prev[metricId],
+      [metricId]: prev[metricId] !== null ? null : 50,
+    }));
+  };
+
+  const handleKoValueChange = (metricId: number, value: number) => {
+    setKoThresholds((prev) => ({
+      ...prev,
+      [metricId]: value,
     }));
   };
 
@@ -164,12 +181,12 @@ export default function Review() {
       }));
 
       // Build KO criteria payload
-      const koPayload = Object.entries(koCriteria)
-        .filter(([, kc]) => kc.enabled)
-        .map(([metricIdStr, kc]) => ({
+      const koPayload = Object.entries(koThresholds)
+        .filter(([, value]) => value !== null)
+        .map(([metricIdStr, value]) => ({
           metric_id: parseInt(metricIdStr),
-          ko_operator: kc.operator,
-          ko_value: kc.value,
+          ko_operator: ">=",
+          ko_value: value!,
         }));
 
       await api.refineDecision(numId, {
@@ -273,6 +290,9 @@ export default function Review() {
           <CardTitle className="text-xl">Criteria &amp; Weights</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
+          <p className="text-sm text-muted-foreground">
+            Adjust weights to set priority. Click <span className="font-semibold">KO</span> to set a minimum score threshold — alternatives scoring below are eliminated from results.
+          </p>
           {groupedMetrics.map(({ dimension, metrics }) => (
             <div key={dimension}>
               <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">
@@ -280,12 +300,9 @@ export default function Review() {
               </h3>
               <div className="space-y-4">
                 {metrics.map((metric) => (
-                  <div
-                    key={metric.id}
-                    className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4"
-                  >
-                    {/* Checkbox + name + description */}
-                    <div className="flex items-start gap-2 sm:w-56 shrink-0">
+                  <div key={metric.id} className="sm:grid sm:grid-cols-[14rem_1fr_auto] sm:gap-x-4 sm:items-center">
+                    {/* Col 1: Checkbox + name + description */}
+                    <div className="flex items-start gap-2 sm:w-auto mb-3 sm:mb-0">
                       <Checkbox
                         id={`metric-${metric.id}`}
                         checked={includedMetrics[metric.id] ?? true}
@@ -304,8 +321,8 @@ export default function Review() {
                       </div>
                     </div>
 
-                    {/* Weight slider */}
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                    {/* Col 2: Weight slider */}
+                    <div className="mb-3 sm:mb-0">
                       <Slider
                         value={[metricWeights[metric.id] ?? 50]}
                         onValueChange={(v) => handleWeightChange(metric.id, v)}
@@ -313,115 +330,59 @@ export default function Review() {
                         max={100}
                         step={1}
                         disabled={!includedMetrics[metric.id]}
-                        className="flex-1"
                       />
+                    </div>
+
+                    {/* Col 3: Value + KO button (always outline, colored when active) */}
+                    <div className="flex items-center gap-2 justify-self-end mb-3 sm:mb-0">
                       <span className="text-sm font-mono w-10 text-right tabular-nums shrink-0">
                         {metricWeights[metric.id] ?? 50}
                       </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={`shrink-0 h-7 px-2 text-xs ${koThresholds[metric.id] !== null ? "bg-red-50 border-red-300 text-red-600 dark:bg-red-950 dark:border-red-800 dark:text-red-400" : ""}`}
+                        disabled={!includedMetrics[metric.id]}
+                        onClick={() => toggleKo(metric.id)}
+                      >
+                        KO
+                      </Button>
                     </div>
 
+                    {/* KO row — same grid columns, only when enabled */}
+                    {includedMetrics[metric.id] && koThresholds[metric.id] !== null && (
+                      <>
+                        {/* Col 1: KO label */}
+                        <div className="flex items-start gap-2">
+                          <div className="w-4 shrink-0" />
+                          <span className="text-xs text-red-500 font-medium leading-tight mt-0.5">KO min threshold</span>
+                        </div>
+
+                        {/* Col 2: KO slider */}
+                        <div>
+                          <Slider
+                            value={[koThresholds[metric.id]!]}
+                            onValueChange={(v) => handleKoValueChange(metric.id, v[0])}
+                            min={0}
+                            max={100}
+                            step={1}
+                            className="[&_[role=slider]]:bg-red-500 [&_[role=slider]]:border-red-500 [&_.bg-primary]:bg-red-500 [&_[role=track]]:bg-red-200 dark:[&_[role=track]]:bg-red-950"
+                          />
+                        </div>
+
+                        {/* Col 3: KO value + invisible button spacer */}
+                        <div className="flex items-center gap-2 justify-self-end">
+                          <span className="text-sm font-mono w-10 text-right tabular-nums text-red-600 dark:text-red-400">
+                            {koThresholds[metric.id]}
+                          </span>
+                          <Button variant="outline" size="sm" className="invisible pointer-events-none shrink-0 h-7 px-2 text-xs" aria-hidden="true" tabIndex={-1}>
+                            KO
+                          </Button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))}
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-
-      {/* ── Knock-Out Criteria Section ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-xl">Knock-Out Criteria</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Set minimum/maximum thresholds that eliminate alternatives. An
-            alternative failing any KO criterion is removed from results.
-          </p>
-          {groupedMetrics.map(({ dimension, metrics }) => (
-            <div key={dimension}>
-              <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">
-                {dimension}
-              </h3>
-              <div className="space-y-3">
-                {metrics
-                  .filter((m) => includedMetrics[m.id])
-                  .map((metric) => {
-                    const kc = koCriteria[metric.id] || {
-                      enabled: false,
-                      operator: ">=",
-                      value: 50,
-                    };
-                    return (
-                      <div
-                        key={metric.id}
-                        className="flex flex-col sm:flex-row sm:items-center gap-3"
-                      >
-                        <div className="flex items-center gap-2 sm:w-48 shrink-0">
-                          <Checkbox
-                            id={`ko-${metric.id}`}
-                            checked={kc.enabled}
-                            onCheckedChange={(checked) =>
-                              setKoCriteria((prev) => ({
-                                ...prev,
-                                [metric.id]: {
-                                  ...prev[metric.id],
-                                  enabled: !!checked,
-                                },
-                              }))
-                            }
-                          />
-                          <Label
-                            htmlFor={`ko-${metric.id}`}
-                            className="font-medium cursor-pointer text-sm"
-                          >
-                            {metric.name}
-                          </Label>
-                        </div>
-                        {kc.enabled && (
-                          <div className="flex items-center gap-2 flex-1">
-                            <select
-                              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-                              value={kc.operator}
-                              onChange={(e) =>
-                                setKoCriteria((prev) => ({
-                                  ...prev,
-                                  [metric.id]: {
-                                    ...prev[metric.id],
-                                    operator: e.target.value,
-                                  },
-                                }))
-                              }
-                            >
-                              <option value=">=">≥</option>
-                              <option value="<=">≤</option>
-                              <option value=">">&gt;</option>
-                              <option value="<">&lt;</option>
-                            </select>
-                            <Input
-                              type="number"
-                              min={0}
-                              max={100}
-                              value={kc.value}
-                              onChange={(e) =>
-                                setKoCriteria((prev) => ({
-                                  ...prev,
-                                  [metric.id]: {
-                                    ...prev[metric.id],
-                                    value: Number(e.target.value),
-                                  },
-                                }))
-                              }
-                              className="w-20"
-                            />
-                            <span className="text-xs text-muted-foreground">
-                              0–100
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
               </div>
             </div>
           ))}

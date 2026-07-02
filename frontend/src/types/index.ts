@@ -218,6 +218,27 @@ export interface MetricsResponse {
   grouped_metrics: Record<string, GroupedMetric[]>;
 }
 
+// ── Metric CRUD types ──
+
+export interface CreateMetricPayload {
+  name: string;
+  category: string;
+  description?: string;
+}
+
+export interface UpdateMetricPayload {
+  name?: string;
+  category?: string;
+  description?: string;
+}
+
+export interface MetricCRUDResponse {
+  id: number;
+  name: string;
+  category: string;
+  description: string;
+}
+
 // ── API request payload types ──
 
 export interface DecideResponse {

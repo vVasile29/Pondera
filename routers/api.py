@@ -846,6 +846,80 @@ def list_metrics(db: Session = Depends(get_db)):
     return {"grouped_metrics": grouped}
 
 
+@router.post("/metrics", status_code=201)
+def create_metric(body: dict, db: Session = Depends(get_db)):
+    name = body.get("name")
+    category = body.get("category")
+    description = body.get("description", "")
+
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(status_code=422, detail="Metric name is required")
+    if not isinstance(category, str) or not category.strip():
+        raise HTTPException(status_code=422, detail="Metric category is required")
+    if not isinstance(description, str):
+        description = ""
+
+    name = name.strip()
+    category = category.strip()
+
+    existing = db.query(Metric).filter(Metric.name == name).first()
+    if existing:
+        raise HTTPException(status_code=422, detail="Metric with this name already exists")
+
+    metric = Metric(name=name, category=category, description=description)
+    db.add(metric)
+    db.commit()
+    db.refresh(metric)
+    return {"id": metric.id, "name": metric.name, "category": metric.category, "description": metric.description or ""}
+
+
+@router.put("/metrics/{metric_id}")
+def update_metric(metric_id: int, body: dict, db: Session = Depends(get_db)):
+    metric = db.query(Metric).filter(Metric.id == metric_id).first()
+    if not metric:
+        raise HTTPException(status_code=404, detail="Metric not found")
+
+    name = body.get("name")
+    category = body.get("category")
+    description = body.get("description")
+
+    if name is not None:
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(status_code=422, detail="Metric name is required")
+        name = name.strip()
+        if name != metric.name:
+            existing = db.query(Metric).filter(Metric.name == name).first()
+            if existing:
+                raise HTTPException(status_code=422, detail="Metric with this name already exists")
+        metric.name = name
+
+    if category is not None:
+        if not isinstance(category, str) or not category.strip():
+            raise HTTPException(status_code=422, detail="Metric category is required")
+        metric.category = category.strip()
+
+    if description is not None:
+        if not isinstance(description, str):
+            description = ""
+        metric.description = description
+
+    db.commit()
+    db.refresh(metric)
+    return {"id": metric.id, "name": metric.name, "category": metric.category, "description": metric.description or ""}
+
+
+@router.delete("/metrics/{metric_id}")
+def delete_metric(metric_id: int, db: Session = Depends(get_db)):
+    metric = db.query(Metric).filter(Metric.id == metric_id).first()
+    if not metric:
+        raise HTTPException(status_code=404, detail="Metric not found")
+
+    # FK cascade (ondelete="CASCADE") handles DecisionWeight and AlternativeScore rows
+    db.delete(metric)
+    db.commit()
+    return {"status": "deleted"}
+
+
 @router.post("/decisions/{decision_id}/delete")
 def delete_decision(decision_id: int, db: Session = Depends(get_db)):
     """Delete a decision and all associated data."""

@@ -11,6 +11,9 @@ import type {
   ThresholdsPayload,
   ThresholdsResponse,
   ClearThresholdsResponse,
+  CreateMetricPayload,
+  UpdateMetricPayload,
+  MetricCRUDResponse,
 } from "@/types";
 
 const API_BASE = "/api";
@@ -86,6 +89,26 @@ export const api = {
   /** List all metrics grouped by dimension. */
   getMetrics(): Promise<MetricsResponse> {
     return request("/metrics");
+  },
+
+  createMetric(data: CreateMetricPayload): Promise<MetricCRUDResponse> {
+    return request("/metrics", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateMetric(id: number, data: UpdateMetricPayload): Promise<MetricCRUDResponse> {
+    return request(`/metrics/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+
+  deleteMetric(id: number): Promise<{ status: string }> {
+    return request(`/metrics/${id}`, {
+      method: "DELETE",
+    });
   },
 
   /** Delete a decision and all associated data. */

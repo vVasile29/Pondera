@@ -5,6 +5,7 @@ import Review from "@/components/Review";
 import Scoring from "@/components/Scoring";
 import Results from "@/components/Results";
 import DecisionList from "@/components/DecisionList";
+import MetricsManager from "@/components/MetricsManager";
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/decisions/:id/review" element={<Review />} />
         <Route path="/decisions/:id/score" element={<Scoring />} />
         <Route path="/decisions/:id/result" element={<Results />} />
+        <Route path="/metrics" element={<MetricsManager />} />
       </Routes>
     </Layout>
   );
