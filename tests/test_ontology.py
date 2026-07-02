@@ -128,6 +128,148 @@ def test_get_universal_criteria_returns_all_metrics():
     assert metrics == UNIVERSAL_METRICS
 
 
+# ── Ontology invariant tests ──
+
+EXPECTED_CATEGORY_IDS = [
+    "resource_fit",
+    "objective_fit",
+    "time_fit",
+    "assurance_fit",
+    "people_fit",
+    "practical_fit",
+]
+
+EXPECTED_METRIC_IDS = [
+    "affordability",
+    "value",
+    "effectiveness",
+    "quality",
+    "timeliness",
+    "efficiency",
+    "reliability",
+    "protection",
+    "desirability",
+    "acceptance",
+    "feasibility",
+    "flexibility",
+]
+
+EXPECTED_CATEGORY_NAMES = [
+    "Resource Fit",
+    "Objective Fit",
+    "Time Fit",
+    "Assurance Fit",
+    "People Fit",
+    "Practical Fit",
+]
+
+FORBIDDEN_METRIC_FIELDS = {"direction", "higher_is_better", "lower_is_better", "score_type"}
+
+
+def test_ontology_exactly_six_categories():
+    """The ontology must expose exactly these six category stable_ids."""
+    assert len(UNIVERSAL_DIMENSIONS) == 6
+    category_ids = [dim["stable_id"] for dim in UNIVERSAL_DIMENSIONS]
+    assert category_ids == EXPECTED_CATEGORY_IDS
+
+
+def test_ontology_exactly_twelve_metrics():
+    """The ontology must expose exactly these twelve metric stable_ids."""
+    assert len(UNIVERSAL_METRICS) == 12
+    metric_ids = [m["stable_id"] for m in UNIVERSAL_METRICS]
+    assert metric_ids == EXPECTED_METRIC_IDS
+
+
+def test_ontology_category_names_match():
+    """Each category has the expected display name."""
+    for dim, expected_name in zip(UNIVERSAL_DIMENSIONS, EXPECTED_CATEGORY_NAMES):
+        assert dim["name"] == expected_name, (
+            f"Expected category name {expected_name!r}, got {dim['name']!r}"
+        )
+
+
+def test_ontology_metric_names_match():
+    """Each metric has the expected display name."""
+    expected_names = [
+        "Affordability", "Value",
+        "Effectiveness", "Quality",
+        "Timeliness", "Efficiency",
+        "Reliability", "Protection",
+        "Desirability", "Acceptance",
+        "Feasibility", "Flexibility",
+    ]
+    for metric, expected_name in zip(UNIVERSAL_METRICS, expected_names):
+        assert metric["name"] == expected_name, (
+            f"Expected metric name {expected_name!r}, got {metric['name']!r}"
+        )
+
+
+def test_ontology_metrics_have_no_direction_fields():
+    """No metric definition contains per-metric direction or score-type fields.
+
+    Higher-is-better is a global invariant of fit scores, not a per-metric property.
+    """
+    for metric in UNIVERSAL_METRICS:
+        metric_keys = set(metric.keys())
+        forbidden_found = metric_keys & FORBIDDEN_METRIC_FIELDS
+        assert not forbidden_found, (
+            f"Metric {metric['name']} contains forbidden field(s): {forbidden_found}"
+        )
+
+
+def test_ontology_every_metric_belongs_to_a_category():
+    """Each metric's category_id matches its parent dimension's stable_id."""
+    for dim in UNIVERSAL_DIMENSIONS:
+        for metric in dim["metrics"]:
+            assert metric["category_id"] == dim["stable_id"], (
+                f"Metric {metric['name']} has category_id {metric['category_id']!r}, "
+                f"expected {dim['stable_id']!r}"
+            )
+
+
+# ── Parser: A/B extraction tests for golden decision case queries ──
+
+
+def test_extract_doctor_or_stay_home():
+    result = extract_alternatives("Should I go to the doctor or stay home?")
+    # Parser strips "should i" but "go to" is not in the verb-strip list,
+    # so the first alternative retains "Go to"
+    assert result[0] == "Go to the doctor"
+    assert result[1] == "Stay home"
+    assert len(result) == 2
+
+
+def test_extract_buy_house_or_rent():
+    result = extract_alternatives("Should I buy a house or rent?")
+    assert "House" in result
+    assert "Rent" in result
+    assert len(result) == 2
+
+
+def test_extract_supplier_a_or_b():
+    result = extract_alternatives("Should we choose Supplier A or Supplier B?")
+    # Parser doesn't strip "should we" (only "should i"), and "choose" at
+    # a non-start position is not stripped either.
+    assert result[0] == "Should we choose Supplier A"
+    assert result[1] == "Supplier B"
+    assert len(result) == 2
+
+
+def test_extract_build_or_buy_software():
+    result = extract_alternatives("Should we build or buy this software?")
+    # Parser doesn't strip "should we" (only "should i" is in the prefix list)
+    assert result[0] == "Should we build"
+    assert result[1] == "Buy this software"
+    assert len(result) == 2
+
+
+def test_extract_switch_jobs_or_stay():
+    result = extract_alternatives("Should I switch jobs or stay?")
+    assert "Switch jobs" in result
+    assert "Stay" in result
+    assert len(result) == 2
+
+
 # ── Basic "or" extraction ──
 
 

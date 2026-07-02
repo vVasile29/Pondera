@@ -308,6 +308,141 @@ def test_increasing_any_metric_score_cannot_reduce_fit_score(db):
     assert after >= before
 
 
+def test_increasing_all_metrics_strictly_increases_score(db):
+    """Increasing ALL metric scores must strictly increase the weighted fit score."""
+    decision = make_decision(db)
+    m1 = make_metric(db, "Affordability")
+    m2 = make_metric(db, "Quality", category="Objective Fit")
+    alt = make_activity(db, "Option", decision.id)
+    db.add_all([
+        DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=60),
+        DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=40),
+        AlternativeScore(activity_id=alt.id, metric_id=m1.id, score=30),
+        AlternativeScore(activity_id=alt.id, metric_id=m2.id, score=40),
+    ])
+    db.commit()
+    before = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+
+    # Increase both scores
+    s1 = db.query(AlternativeScore).filter_by(activity_id=alt.id, metric_id=m1.id).one()
+    s2 = db.query(AlternativeScore).filter_by(activity_id=alt.id, metric_id=m2.id).one()
+    s1.score = 80
+    s2.score = 90
+    db.commit()
+    after = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+
+    assert after > before, f"Expected strict increase, got {before} -> {after}"
+
+
+def test_every_metric_is_monotonic_individual(db):
+    """Each individual metric, when increased, cannot reduce the fit score."""
+    decision = make_decision(db)
+    metric_names = ["Affordability", "Effectiveness", "Quality", "Timeliness",
+                    "Efficiency", "Reliability", "Protection", "Desirability",
+                    "Acceptance", "Feasibility", "Flexibility", "Value"]
+    metrics = {}
+    for name in metric_names:
+        metrics[name] = make_metric(db, name)
+
+    alt = make_activity(db, "Test", decision.id)
+
+    for m in metrics.values():
+        db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=10))
+        db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=20))
+    db.commit()
+
+    for metric_name, metric_obj in metrics.items():
+        baseline = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+
+        score_row = db.query(AlternativeScore).filter_by(
+            activity_id=alt.id, metric_id=metric_obj.id
+        ).one()
+        score_row.score = 90
+        db.commit()
+
+        improved = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+        assert improved >= baseline, (
+            f"Increasing {metric_name} reduced fit score from {baseline} to {improved}"
+        )
+
+        # Reset for next metric
+        score_row.score = 20
+        db.commit()
+
+
+def test_no_metric_is_inverted(db):
+    """Every metric score contributes positively: higher score -> higher or equal fit.
+
+    This proves no metric has inverted semantics (e.g., a cost-like metric treated
+    as higher-is-worse).
+    """
+    decision = make_decision(db)
+    m = make_metric(db, "Affordability")
+    alt = make_activity(db, "Option", decision.id)
+    db.add(DecisionWeight(decision_id=decision.id, metric_id=m.id, weight=100))
+    db.add(AlternativeScore(activity_id=alt.id, metric_id=m.id, score=0))
+    db.commit()
+
+    zero_score = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+    assert zero_score == 0.0
+
+    score_row = db.query(AlternativeScore).filter_by(activity_id=alt.id, metric_id=m.id).one()
+    score_row.score = 100
+    db.commit()
+
+    perfect_score = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+    assert perfect_score == 1.0
+
+    # The fit score should monotonically increase as we go from 0 to 100
+    score_row.score = 0
+    db.commit()
+    prev = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+    for val in range(10, 101, 10):
+        score_row.score = val
+        db.commit()
+        cur = compute_alternative_fit_scores(decision.id, db)[0]["fit_score"]
+        assert cur > prev, f"Score decreased when metric {m.name} increased from {(val-10)} to {val}"
+        prev = cur
+
+
+def test_fit_scores_are_in_range(db):
+    """All computed fit scores must be in the 0.0-1.0 range."""
+    decision = make_decision(db)
+    m1 = make_metric(db, "Affordability")
+    m2 = make_metric(db, "Quality", category="Objective Fit")
+    m3 = make_metric(db, "Protection", category="Assurance Fit")
+    alt1 = make_activity(db, "Low", decision.id)
+    alt2 = make_activity(db, "Mid", decision.id)
+    alt3 = make_activity(db, "High", decision.id)
+
+    db.add_all([
+        DecisionWeight(decision_id=decision.id, metric_id=m1.id, weight=80),
+        DecisionWeight(decision_id=decision.id, metric_id=m2.id, weight=60),
+        DecisionWeight(decision_id=decision.id, metric_id=m3.id, weight=50),
+        AlternativeScore(activity_id=alt1.id, metric_id=m1.id, score=0),
+        AlternativeScore(activity_id=alt1.id, metric_id=m2.id, score=0),
+        AlternativeScore(activity_id=alt1.id, metric_id=m3.id, score=0),
+        AlternativeScore(activity_id=alt2.id, metric_id=m1.id, score=50),
+        AlternativeScore(activity_id=alt2.id, metric_id=m2.id, score=50),
+        AlternativeScore(activity_id=alt2.id, metric_id=m3.id, score=50),
+        AlternativeScore(activity_id=alt3.id, metric_id=m1.id, score=100),
+        AlternativeScore(activity_id=alt3.id, metric_id=m2.id, score=100),
+        AlternativeScore(activity_id=alt3.id, metric_id=m3.id, score=100),
+    ])
+    db.commit()
+
+    results = compute_alternative_fit_scores(decision.id, db)
+    for r in results:
+        assert 0.0 <= r["fit_score"] <= 1.0, (
+            f"fit_score {r['fit_score']} for {r['activity_name']} out of [0.0, 1.0] range"
+        )
+    # Verify the extremes
+    low = next(r for r in results if r["activity_name"] == "Low")
+    high = next(r for r in results if r["activity_name"] == "High")
+    assert low["fit_score"] == 0.0
+    assert high["fit_score"] == 1.0
+
+
 # ── Threshold filtering tests ──
 
 
