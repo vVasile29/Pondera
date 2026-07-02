@@ -36,10 +36,11 @@ and how stable that ranking is under uncertainty.
 Question Input
   → Parser (extracts alternatives / single subject / list structure)
   → Internal Routing (diagnosis / comparison / ranking)
-  → Review (edit alternatives, select from pre-seeded criteria, adjust weights)
+  → Review (edit alternatives, select from pre-seeded criteria, adjust weights,
+    set knock-out thresholds)
   → Score (rate each alternative on each criterion, 0–100)
-  → Results (fit scores, radar chart, score table)
-  → Optional Post-hoc Thresholds & Robustness
+  → Results (fit scores, radar chart, score table, KO evaluation,
+    threshold filters, robustness analysis)
 ```
 
 ### 1. Unified Prompt Entry
@@ -81,6 +82,9 @@ use a 0–100 granular scale.
 
 ### 4. Results, Thresholds, and Robustness
 
+- **Knock-out (KO) criteria** — set minimum score thresholds per criterion
+  on the review page. Alternatives failing any KO criterion are eliminated
+  before ranking. KO criteria act as a pre-scoring eligibility gate.
 - **Radar chart** — visualize how alternatives compare across all criteria.
 - **Post-hoc threshold filters** — apply must-have cutoffs (e.g. `Cost >= 60`,
   `Safety >= 80`) after scoring to separate passing and failing alternatives.
@@ -99,12 +103,17 @@ use a 0–100 granular scale.
 - **Universal criteria framework** — 6 value dimensions, 12 curated metrics,
   pre-seeded globally
 - **Interactive review** — inspect and edit parsed alternatives, select
-  from pre-seeded criteria, adjust decision-level weights
+  from pre-seeded criteria, adjust decision-level weights, set knock-out
+  thresholds per criterion
 - **Weighted scoring** — 0–100 sliders, weighted additive MCDA model
+- **Knock-out (KO) criteria** — define minimum score thresholds per criterion;
+  alternatives that fail any KO criterion are eliminated before ranking
 - **Decision robustness** — Monte Carlo sensitivity analysis with winner
   retention and rank acceptability
 - **Post-hoc threshold filtering** — must-have cutoffs applied after scoring
 - **Radar chart** — Chart.js visualization for multi-criteria comparison
+- **Metrics management** — built-in page to create, edit, and delete criteria
+  across the 6 universal dimensions
 - **Zero signup** — no accounts required; decisions stored in the configured
   backend database (SQLite by default)
 - **Dark/light mode** — toggleable theme with system preference detection
@@ -228,7 +237,7 @@ client-side React SPA that communicates exclusively with these API endpoints.
 │   └── decision_limits.py        # Workload guards for robustness
 ├── frontend/                     # React SPA
 │   ├── src/
-│   │   ├── components/           # Page and shared components
+│   │   ├── components/           # Page and shared components (incl. MetricsManager)
 │   │   ├── hooks/                # Custom React hooks
 │   │   ├── lib/                  # API client, scoring utilities
 │   │   └── types/                # TypeScript interfaces
